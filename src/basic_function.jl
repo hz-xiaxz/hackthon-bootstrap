@@ -643,6 +643,10 @@ function RDMRegion(name, sites; blocks=nothing)
     return RDMRegion(Symbol(name), sites, blocks)
 end
 
+function _maximum_site(polynomial::PauliPolynomial)
+    maximum((cld(Int(label), 3) for term in polynomial.terms for label in term.word); init=0)
+end
+
 """Complete explicit input to the Gate A compiler."""
 struct RelaxationSpecification
     hamiltonian::PauliPolynomial
@@ -666,12 +670,32 @@ function RelaxationSpecification(hamiltonian, basis;
     isempty(basis) && throw(ArgumentError("at least one explicit basis sector is required"))
     names = getfield.(basis, :name)
     length(unique(names)) == length(names) || throw(ArgumentError("basis sector names must be unique"))
+    all(test -> test isa PauliPolynomial, linear_tests) ||
+        throw(ArgumentError("linear tests must be explicit PauliPolynomial values"))
+    all(observable -> observable isa PauliPolynomial && observable.hermitian, values(observables)) ||
+        throw(ArgumentError("observables must be Hermitian PauliPolynomial values"))
+    all(region -> region isa RDMRegion, rdm_regions) ||
+        throw(ArgumentError("RDM regions must be explicit RDMRegion values"))
     scope = validate_relaxation_label(:result_scope, certificate_scope)
     scope == :rigorously_postvalidated && throw(ArgumentError("rigorously_postvalidated scope requires an independent postvalidation result"))
     isfinite(normalization) && normalization != 0 || throw(ArgumentError("normalization must be finite and nonzero"))
-    maxsite = maximum((cld(Int(term.word[end]), 3) for term in hamiltonian.terms if !isempty(term.word)); init=0)
+    maxsite = _maximum_site(hamiltonian)
     for sector in basis, word in sector.words
-        isempty(word) || (maxsite = max(maxsite, cld(Int(word[end]), 3)))
+        for label in word
+            maxsite = max(maxsite, cld(Int(label), 3))
+        end
+    end
+    for test in linear_tests
+        maxsite = max(maxsite, _maximum_site(test))
+    end
+    for observable in values(observables)
+        maxsite = max(maxsite, _maximum_site(observable))
+    end
+    for word in psd_state_basis, label in word
+        maxsite = max(maxsite, cld(Int(label), 3))
+    end
+    for region in rdm_regions
+        maxsite = max(maxsite, maximum(region.sites))
     end
     for symmetry in symmetries
         length(symmetry.site_map) >= maxsite || throw(ArgumentError("symmetry $(symmetry.name) does not cover all used sites"))

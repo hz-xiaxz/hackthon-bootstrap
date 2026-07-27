@@ -67,6 +67,12 @@ end
         certificate_scope=:rigorously_postvalidated)
     @test_throws ArgumentError RelaxationSpecification(hamiltonian, [sector];
         certificate_scope=:unknown)
+    identity_on_one_site = SymmetryDeclaration(:identity, :moment_equality, [1])
+    @test_throws ArgumentError RelaxationSpecification(hamiltonian, [sector];
+        symmetries=[identity_on_one_site],
+        observables=Dict(:site_two => PauliPolynomial([UInt16[4] => 1.0])))
+    @test_throws ArgumentError RelaxationSpecification(hamiltonian, [sector];
+        observables=Dict(:nonhermitian => PauliPolynomial([UInt16[1] => im]; hermitian=false)))
 end
 
 @testset "Phase 1 deterministic B†B, strengthening, RDM, and closure" begin
