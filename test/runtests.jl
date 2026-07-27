@@ -106,6 +106,13 @@ end
     @test diagnostics.linear_rows_duplicate == 1
     @test diagnostics.linear_rows_zero == 1
     @test diagnostics.linear_rows_independent == 1
+    commutator_spec = RelaxationSpecification(
+        PauliPolynomial([UInt16[1] => 0.7]),
+        [BasisSector(:commutator_basis, [UInt16[], UInt16[1], UInt16[2], UInt16[3]])];
+        linear_tests=[PauliPolynomial([UInt16[2] => 1.0])])
+    commutator_row = only(compile_relaxation(commutator_spec).linear_rows)
+    @test commutator_row.words == [UInt16[3]]
+    @test commutator_row.coefficients ≈ ComplexF64[1.4im]
     @test diagnostics.psd_block_count == 3
     @test diagnostics.psd_block_dimensions == [4, 2, 4]
     @test diagnostics.max_psd_block_dimension == 4
