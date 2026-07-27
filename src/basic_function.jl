@@ -858,7 +858,7 @@ function _fingerprint(text::AbstractString)
     return lowercase(string(hash, base=16, pad=16))
 end
 
-function _artifact_fingerprint(spec, moments, blocks, rows, objective)
+function _artifact_fingerprint(spec, moments, blocks, rows, objective, observables)
     io = IOBuffer()
     print(io, "scope=", spec.certificate_scope, ";normalization=", repr(spec.normalization), ';')
     for term in spec.hamiltonian.terms
@@ -876,7 +876,16 @@ function _artifact_fingerprint(spec, moments, blocks, rows, objective)
     for row in rows
         print(io, "L:", _row_signature(row), ';')
     end
-    print(io, "O:", _row_signature(objective))
+    print(io, "O:")
+    for (word, coefficient) in zip(objective.words, objective.coefficients)
+        print(io, _word_key(word), '=', repr(coefficient), ';')
+    end
+    for name in sort!(collect(keys(observables)))
+        print(io, "V:", name, ':')
+        for (word, coefficient) in zip(observables[name].words, observables[name].coefficients)
+            print(io, _word_key(word), '=', repr(coefficient), ';')
+        end
+    end
     return _fingerprint(String(take!(io)))
 end
 
@@ -952,6 +961,14 @@ end
 function compile_relaxation(spec::RelaxationSpecification)
     blocks = CompiledPSDBlock[]
     all_words = Set{Vector{UInt16}}([UInt16[]])
+    support_sources = Dict{Vector{UInt16},Vector{String}}(UInt16[] => ["moment normalization"])
+    function register_support!(entry::AffineMomentEntry, source::AbstractString)
+        for word in entry.words
+            push!(all_words, word)
+            sources = get!(support_sources, word, String[])
+            source in sources || push!(sources, String(source))
+        end
+    end
     zeroed = equated = 0
     provenance = String[]
     raw_basis_size = sum(length(sector.words) for sector in spec.basis)
@@ -964,12 +981,14 @@ function compile_relaxation(spec::RelaxationSpecification)
             polynomial = PauliPolynomial([product_word => phase]; hermitian=false)
             entry, z, e = _entry(polynomial, spec.symmetries; provenance="B†B $(sector.name)[$row,$column]")
             entries[row, column] = entry
-            union!(all_words, entry.words)
             zeroed += z; equated += e
         end
         fourier_blocks = _fourier_blocks(sector, entries, spec.symmetries)
         if fourier_blocks !== nothing
             append!(blocks, fourier_blocks)
+            for block in fourier_blocks, entry in block.entries
+                register_support!(entry, "Fourier basis block $(block.name)")
+            end
             append!(provenance, ["Fourier PSD sector $(block.name), dimension $(size(block.entries, 1))"
                                  for block in fourier_blocks])
         else
@@ -977,17 +996,21 @@ function compile_relaxation(spec::RelaxationSpecification)
                 block_entries = entries[indices, indices]
                 push!(blocks, CompiledPSDBlock(block_name, sector.psd_role, block_entries,
                     ["B†B:$(sector.name)[$row,$column]" for row in indices for column in indices]))
+                for row in indices, column in indices
+                    register_support!(entries[row, column], "B†B $(sector.name)[$row,$column]")
+                end
                 push!(provenance, "moment PSD sector $block_name, dimension $(length(indices))")
             end
         end
     end
 
     objective, z, e = _entry(spec.hamiltonian, spec.symmetries; provenance="Hamiltonian objective")
-    zeroed += z; equated += e; union!(all_words, objective.words)
+    zeroed += z; equated += e; register_support!(objective, "Hamiltonian objective")
     observables = Dict{Symbol,AffineMomentEntry}()
     for name in sort!(collect(keys(spec.observables)))
         entry, z, e = _entry(spec.observables[name], spec.symmetries; provenance="observable $name")
-        observables[name] = entry; zeroed += z; equated += e; union!(all_words, entry.words)
+        observables[name] = entry; zeroed += z; equated += e
+        register_support!(entry, "observable $name")
     end
 
     raw_linear = length(spec.linear_tests)
@@ -1005,7 +1028,8 @@ function compile_relaxation(spec::RelaxationSpecification)
         elseif signature in signatures
             duplicate_linear += 1
         else
-            push!(signatures, signature); push!(linear_rows, entry); union!(all_words, entry.words)
+            push!(signatures, signature); push!(linear_rows, entry)
+            register_support!(entry, "linear state-optimality test $test_index")
             push!(provenance, "linear state optimality test $test_index")
         end
     end
@@ -1027,7 +1051,8 @@ function compile_relaxation(spec::RelaxationSpecification)
             if row != column
                 entries[column, row] = AffineMomentEntry(copy(entry.words), conj.(entry.coefficients))
             end
-            zeroed += z; equated += e; union!(all_words, entry.words)
+            zeroed += z; equated += e
+            register_support!(entry, "PSD state-optimality[$row,$column]")
         end
         push!(blocks, CompiledPSDBlock(:state_optimality, :state_optimality, entries,
             ["PSD state optimality[$row,$column]" for row in 1:n for column in 1:n]))
@@ -1039,7 +1064,9 @@ function compile_relaxation(spec::RelaxationSpecification)
     for region in spec.rdm_regions
         entries, z, e = _rdm_entries(region, spec.symmetries)
         zeroed += z; equated += e
-        for entry in entries; union!(all_words, entry.words); end
+        for row in axes(entries, 1), column in axes(entries, 2)
+            register_support!(entries[row, column], "RDM $(region.name)[$row,$column]")
+        end
         declared_blocks = region.blocks === nothing ? [collect(axes(entries, 1))] : region.blocks
         flattened = vcat(declared_blocks...)
         sort(flattened) == collect(axes(entries, 1)) && length(unique(flattened)) == length(flattened) ||
@@ -1059,7 +1086,9 @@ function compile_relaxation(spec::RelaxationSpecification)
     if spec.declared_moment_support !== nothing
         declared = Set(spec.declared_moment_support)
         for word in moments
-            word in declared || push!(missing, "missing canonical moment [$(_word_key(word))]")
+            word in declared || push!(missing,
+                "missing canonical moment [$(_word_key(word))] required by " *
+                join(get(support_sources, word, ["unknown source"]), ", "))
         end
         isempty(missing) || throw(ArgumentError("moment closure failed: " * join(missing, "; ")))
     end
@@ -1076,7 +1105,7 @@ function compile_relaxation(spec::RelaxationSpecification)
     any(block -> size(block.entries, 1) == 0, blocks) && throw(ArgumentError("empty PSD block"))
 
     dimensions = [size(block.entries, 1) for block in blocks]
-    fingerprint = _artifact_fingerprint(spec, moments, blocks, linear_rows, objective)
+    fingerprint = _artifact_fingerprint(spec, moments, blocks, linear_rows, objective, observables)
     diagnostics = CompilationDiagnostics(raw_basis_size, raw_basis_size,
         sum(length(sector.words)^2 for sector in spec.basis), zeroed, equated,
         length(moments), raw_linear, zero_linear, duplicate_linear, length(linear_rows),

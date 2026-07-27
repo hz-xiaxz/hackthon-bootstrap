@@ -94,6 +94,12 @@ end
     diagnostics = first_compile.diagnostics
     @test first_compile.moments == second_compile.moments
     @test diagnostics.fingerprint == second_compile.diagnostics.fingerprint
+    changed_observable_spec = RelaxationSpecification(hamiltonian, basis;
+        linear_tests=linear_tests,
+        psd_state_basis=[UInt16[], UInt16[2]],
+        rdm_regions=[RDMRegion(:sites_1_2, [1, 2])],
+        observables=Dict(:magnetization => PauliPolynomial([UInt16[1] => 2.0])))
+    @test compile_relaxation(changed_observable_spec).diagnostics.fingerprint != diagnostics.fingerprint
     @test length(diagnostics.fingerprint) == 16
     @test diagnostics.raw_basis_size == 4
     @test diagnostics.raw_bdagb_entries == 16
@@ -180,6 +186,9 @@ end
     end
     @test closure_error isa ArgumentError
     @test contains(string(closure_error), "moment closure failed")
+    @test contains(string(closure_error), "required by")
+    @test contains(string(closure_error), "Hamiltonian objective")
+    @test contains(string(closure_error), "B†B main")
 end
 
 @testset "Phase 1 explicit symmetry purposes and Fourier blocks" begin
