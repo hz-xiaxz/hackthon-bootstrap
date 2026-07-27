@@ -252,9 +252,13 @@ end
     @test benchmark.sparse_basis_size == 12_001
     @test length(benchmark.basis.words) == 12_001
     @test benchmark.max_psd_block_dimension == 31
+    @test length(benchmark.symmetry_block_upper_bounds) == 100
+    @test maximum(benchmark.symmetry_block_upper_bounds) == benchmark.max_psd_block_dimension
+    @test all(==(31), benchmark.symmetry_block_upper_bounds)
     @test benchmark.original_dimension == 8_127_090_301
     @test benchmark.equality_reduced_dimension == 322_029_976
     @test benchmark.max_psd_block_dimension != benchmark.sparse_basis_size
+    @test_throws ArgumentError heisenberg_table2_benchmark(100, 4, 2)
 end
 
 function mosek_license_available()

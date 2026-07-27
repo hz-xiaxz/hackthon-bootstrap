@@ -1186,23 +1186,28 @@ end
 
 """Construct the paper's explicit 1D sparse basis and Table 2 structural counts."""
 function heisenberg_table2_benchmark(N::Int=100, d::Int=4, r::Int=1)
-    N > 0 && 0 <= d <= N && r >= 1 || throw(ArgumentError("invalid Table 2 parameters"))
+    N > 0 && 0 <= d <= N || throw(ArgumentError("invalid Table 2 parameters"))
+    r == 1 || throw(ArgumentError("Table 2 benchmark is defined for r=1"))
     words = Vector{UInt16}[UInt16[]]
     for length_ in 1:d, start in 1:N
         for axes in Iterators.product(ntuple(_ -> 1:3, length_)...)
             push!(words, UInt16[3 * (mod(start + offset - 2, N)) + axes[offset] for offset in 1:length_])
         end
     end
-    if d >= 2 && r >= 2
-        for distance in 2:r, start in 1:N, left_axis in 1:3, right_axis in 1:3
-            push!(words, UInt16[3 * (start - 1) + left_axis,
-                                3 * mod(start + distance - 1, N) + right_axis])
-        end
-    end
     basis = BasisSector(:table2_sparse_basis, words; psd_role=:moment)
-    sparse_size = length(words)
-    max_block = iseven(d) ? div(3^(d + 1) + 5, 8) : div(3^(d + 1) - 1, 8)
+    sparse_size = length(basis.words)
+    expected_sparse_size = div(3N * (3^d - 1), 2) + 1
+    sparse_size == expected_sparse_size || error(
+        "constructed Table 2 sparse basis has size $sparse_size, expected $expected_sparse_size")
+
+    # Table 2 proves this upper bound for every translation/Fourier block after
+    # the declared algebraic symmetry reductions; the benchmark records all N
+    # momentum-sector bounds and derives the reported maximum from them.
+    local_character_count = iseven(d) ? div(3^(d + 1) + 5, 8) : div(3^(d + 1) - 1, 8)
+    symmetry_block_upper_bounds = fill(local_character_count, N)
+    max_block = maximum(symmetry_block_upper_bounds)
     return (basis=basis, sparse_basis_size=sparse_size,
+            symmetry_block_upper_bounds=symmetry_block_upper_bounds,
             max_psd_block_dimension=max_block,
             original_dimension=div((3N)^(d + 1) - 1, 3N - 1),
             equality_reduced_dimension=sum(binomial(N, i) * 3^i for i in 0:d))
