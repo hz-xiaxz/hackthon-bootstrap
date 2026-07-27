@@ -1,6 +1,6 @@
 # Hamiltonian Bootstrap Model Ladder
 
-**文件状态：** In Progress  
+**文件状态：** Gate A Complete（Phase 0–1；Phase 2+ 未执行）  
 **计划日期：** 2026-07-27  
 **目标仓库：** `/home/hzxiaxz/Quantum-harness/Hamiltonian-Bootstrap`  
 **实施路线（固定顺序）：** MG/显式二聚化 chain → cluster model 加场 → toric code 加场 → Kitaev honeycomb → Shastry–Sutherland → triangular J1-J2
