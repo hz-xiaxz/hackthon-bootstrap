@@ -205,67 +205,146 @@ function reduce3!(a::Vector{UInt16})
     return a
 end
 
-# identify zeros by sign symmetry
-function isz(a::Vector{UInt16})
-    return any(i->isodd(count(isequal(i), mod.(a,3))), 0:2)
+abstract type AbstractSymmetryModel end
+
+"""
+Symmetries used to identify Pauli words and eliminate moments.
+
+`axis_permutations` acts on Pauli labels `(X,Y,Z)`. Each `sign_generator`
+is a tuple whose true entries change sign under one independent Z₂ symmetry.
+Spatial translations/reflections are handled separately from internal symmetry.
+"""
+struct PauliSymmetryModel <: AbstractSymmetryModel
+    axis_permutations::Vector{NTuple{3,UInt8}}
+    sign_generators::Vector{NTuple{3,Bool}}
+    translation::Bool
+    reflection::Bool
 end
 
-# reduction w.r.t symmetries
-function reduce4(a::Vector{UInt16}, L; lattice="chain")
-    l = length(a)
-    if l > 0
-        pa = Vector{UInt16}[]
-        if lattice == "chain"
-            for i = 1:l
-                ta = [a[i:end]; a[1:i-1] .+ 3L] .- 3*(ceil(UInt16, a[i]/3) - 1)
-                append!(pa, perm(ta))
-                rta = reverse(ta)
-                ma = 3*(ceil(UInt16, ta[end]/3) .- ceil.(UInt16, rta/3)) + smod.(rta, 3)
-                append!(pa, perm(ma))
-            end
-        else
-            factor = [[1;1], [-1;1], [1;-1], [-1;-1]]
-            loc = location.(ceil.(UInt16, a/3))
-            for i = 1:l
-                temp = zeros(UInt16, l)
-                for k = 1:4
-                    for j = 1:l
-                        p = slabel(factor[k][1]*(loc[j][1]-loc[i][1])+1, factor[k][2]*(loc[j][2]-loc[i][2])+1, L=L)
-                        temp[j] = 3*p + a[j] - 3*ceil(UInt16, a[j]/3)
-                    end
-                    append!(pa, perm(sort(temp)))
-                    for j = 1:l
-                        p = slabel(factor[k][1]*(loc[j][2]-loc[i][2])+1, factor[k][2]*(loc[j][1]-loc[i][1])+1, L=L)
-                        temp[j] = 3*p + a[j] - 3*ceil(UInt16, a[j]/3)
-                    end
-                    append!(pa, perm(sort(temp)))
-                end
-            end
-        end
-        return findmin(pa)[1]
-    else
-        return a
+const _IDENTITY_AXIS_PERMUTATION = (UInt8(1), UInt8(2), UInt8(3))
+
+"""Symmetry assumptions historically used by `GSB` for Heisenberg models."""
+function heisenberg_symmetry(; translation=true, reflection=true)
+    axis_permutations = NTuple{3,UInt8}[
+        (1, 2, 3), (1, 3, 2), (2, 1, 3),
+        (2, 3, 1), (3, 1, 2), (3, 2, 1),
+    ]
+    sign_generators = NTuple{3,Bool}[(true, true, false), (false, true, true)]
+    return PauliSymmetryModel(axis_permutations, sign_generators, translation, reflection)
+end
+
+"""
+Symmetry model for the periodic transverse-field Ising chain
+`H = -J∑ ZᵢZᵢ₊₁ - h∑ Xᵢ`.
+
+The global `∏Xᵢ` symmetry changes the signs of Y and Z. Consequently every
+word containing an odd total number of Y/Z factors has zero invariant moment.
+"""
+function ising_chain_symmetry(; translation=true, reflection=true)
+    return PauliSymmetryModel(
+        NTuple{3,UInt8}[_IDENTITY_AXIS_PERMUTATION],
+        NTuple{3,Bool}[(false, true, true)],
+        translation,
+        reflection,
+    )
+end
+
+# Identify moments forced to zero by model-specific sign symmetries.
+function isz(a::Vector{UInt16}, symmetry::PauliSymmetryModel=heisenberg_symmetry())
+    counts = ntuple(label -> count(==(label), smod.(a, 3)), 3)
+    return any(symmetry.sign_generators) do generator
+        isodd(sum(counts[label] for label in 1:3 if generator[label]))
     end
 end
 
-# implement all reductions
-function reduce!(a::Vector{UInt16}; L=0, lattice="chain", realify=false)
+function perm(a, symmetry::PauliSymmetryModel=heisenberg_symmetry())
+    labels = smod.(a, 3)
+    sites = 3 .* (ceil.(Int, a ./ 3) .- 1)
+    return [UInt16.(sites .+ [axis_permutation[label] for label in labels])
+            for axis_permutation in symmetry.axis_permutations]
+end
+
+# Reduction with respect to spatial and internal symmetries.
+function reduce4(a::Vector{UInt16}, L; lattice="chain", symmetry::PauliSymmetryModel=heisenberg_symmetry())
+    isempty(a) && return a
+    L > 0 || throw(ArgumentError("L must be positive when reducing a nonempty word by spatial symmetry"))
+
+    spatial_orbit = Vector{UInt16}[]
+    if lattice == "chain"
+        if symmetry.translation
+            for i in eachindex(a)
+                translated = [a[i:end]; a[1:i-1] .+ 3L] .- 3 * (ceil(UInt16, a[i] / 3) - 1)
+                push!(spatial_orbit, translated)
+                if symmetry.reflection
+                    reversed = reverse(translated)
+                    reflected = 3 .* (ceil(UInt16, translated[end] / 3) .- ceil.(UInt16, reversed / 3)) + smod.(reversed, 3)
+                    push!(spatial_orbit, reflected)
+                end
+            end
+        else
+            push!(spatial_orbit, copy(a))
+            if symmetry.reflection
+                sites = ceil.(UInt16, a / 3)
+                reflected = 3 .* (sites[end] .- reverse(sites)) + smod.(reverse(a), 3)
+                push!(spatial_orbit, reflected)
+            end
+        end
+    else
+        factor = [[1;1], [-1;1], [1;-1], [-1;-1]]
+        loc = location.(ceil.(UInt16, a / 3))
+        anchors = symmetry.translation ? eachindex(a) : (1:1)
+        transforms = symmetry.reflection ? (1:4) : (1:1)
+        for i in anchors, k in transforms
+            temp = zeros(UInt16, length(a))
+            for j in eachindex(a)
+                p = slabel(factor[k][1] * (loc[j][1] - loc[i][1]) + 1,
+                           factor[k][2] * (loc[j][2] - loc[i][2]) + 1, L=L)
+                temp[j] = 3p + a[j] - 3 * ceil(UInt16, a[j] / 3)
+            end
+            push!(spatial_orbit, sort(temp))
+            if symmetry.reflection
+                for j in eachindex(a)
+                    p = slabel(factor[k][1] * (loc[j][2] - loc[i][2]) + 1,
+                               factor[k][2] * (loc[j][1] - loc[i][1]) + 1, L=L)
+                    temp[j] = 3p + a[j] - 3 * ceil(UInt16, a[j] / 3)
+                end
+                push!(spatial_orbit, sort(temp))
+            end
+        end
+    end
+
+    orbit = Vector{UInt16}[]
+    for word in spatial_orbit
+        append!(orbit, perm(word, symmetry))
+    end
+    return minimum(orbit)
+end
+
+# Implement Pauli algebra reduction followed by model-specific symmetry reduction.
+function reduce!(a::Vector{UInt16}; L=0, lattice="chain", realify=false,
+                 symmetry::PauliSymmetryModel=heisenberg_symmetry())
     reduce1!(a)
     reduce3!(a)
     a,coef = reduce2!(a, realify=realify)
     reduce3!(a)
-    if isz(a)
+    if isz(a, symmetry)
         coef = 0
     else
-        a = reduce4(a, L, lattice=lattice)
+        a = reduce4(a, L, lattice=lattice, symmetry=symmetry)
     end
     return a,coef
 end
 
-function perm(a)
-    ra = smod.(a, 3)
-    sym = [[1;2;3], [1;3;2], [2;1;3], [2;3;1], [3;1;2], [3;2;1]]
-    return [UInt16.(3*(ceil.(Int, a./3).-1) .+ sym[i][ra]) for i=1:6]
+"""Return the distinct nonzero symmetry representatives of Pauli words."""
+function symmetry_reduce_support(words, L; lattice="chain", symmetry=heisenberg_symmetry())
+    representatives = Vector{UInt16}[]
+    for word in words
+        representative, coefficient = reduce!(UInt16.(word), L=L, lattice=lattice, symmetry=symmetry)
+        coefficient == 0 || push!(representatives, representative)
+    end
+    sort!(representatives)
+    unique!(representatives)
+    return representatives
 end
 
 function slabel(i, j; L=0)

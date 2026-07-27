@@ -17,3 +17,9 @@ MosekTools = "1ec41992-ff65-5c91-ac43-2df89e9693a4"
 [compat]
 Mosek = "11.0.1"
 MosekTools = "0.15.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
