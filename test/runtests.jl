@@ -146,6 +146,21 @@ end
     end
     rdm = only(filter(block -> block.role == :rdm, first_compile.psd_blocks))
     @test UInt16[] in rdm.entries[1, 1].words
+    identity_trace = sum(begin
+        location = findfirst(==(UInt16[]), rdm.entries[i, i].words)
+        location === nothing ? 0.0 + 0.0im : rdm.entries[i, i].coefficients[location]
+    end for i in axes(rdm.entries, 1))
+    @test identity_trace == 1
+
+    blocked_rdm_spec = RelaxationSpecification(hamiltonian, basis;
+        rdm_regions=[RDMRegion(:blocked_site, [1]; blocks=[[1], [2]])])
+    blocked_rdm = filter(block -> block.role == :rdm,
+                         compile_relaxation(blocked_rdm_spec).psd_blocks)
+    @test getfield.(blocked_rdm, :name) == [:blocked_site_block_1, :blocked_site_block_2]
+    @test size.(getfield.(blocked_rdm, :entries), 1) == [1, 1]
+    bad_partition = RelaxationSpecification(hamiltonian, basis;
+        rdm_regions=[RDMRegion(:bad_partition, [1]; blocks=[[1]])])
+    @test_throws ArgumentError compile_relaxation(bad_partition)
 
     built = build_jump_model(first_compile)
     @test built.compiled === first_compile
