@@ -1103,7 +1103,8 @@ function _jump_entry(entry::AffineMomentEntry, moments)
 end
 
 """Build JuMP variables and constraints from a compiled artifact, without solving it."""
-function build_jump_model(compiled::CompiledRelaxation; optimizer=nothing, optimizer_attributes=Pair[])
+function build_jump_model(compiled::CompiledRelaxation; optimizer=nothing, optimizer_attributes=Pair[],
+                          objective::Symbol=:hamiltonian)
     model = optimizer === nothing ? Model() : Model(optimizer_with_attributes(optimizer, optimizer_attributes...))
     @variable(model, moment_variables[1:length(compiled.moments)])
     moment_handle = (variables=moment_variables, index=compiled.moment_index)
@@ -1122,10 +1123,17 @@ function build_jump_model(compiled::CompiledRelaxation; optimizer=nothing, optim
         end
         @constraint(model, Symmetric([real_part -imaginary_part; imaginary_part real_part]) in PSDCone())
     end
-    objective, imaginary_objective = _jump_entry(compiled.objective, moment_handle)
+    objective_entry = if objective == :hamiltonian
+        compiled.objective
+    else
+        get(compiled.observables, objective) do
+            throw(ArgumentError("compiled artifact has no observable named $objective"))
+        end
+    end
+    objective_expression, imaginary_objective = _jump_entry(objective_entry, moment_handle)
     isempty(imaginary_objective.terms) && imaginary_objective.constant == 0 ||
-        throw(ArgumentError("Hamiltonian objective is not real"))
-    @objective(model, Min, objective / compiled.specification.normalization)
+        throw(ArgumentError("objective $objective is not real"))
+    @objective(model, Min, objective_expression / compiled.specification.normalization)
     return BuiltRelaxationModel(model, moment_handle, compiled)
 end
 

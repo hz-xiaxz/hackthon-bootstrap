@@ -165,6 +165,10 @@ end
     built = build_jump_model(first_compile)
     @test built.compiled === first_compile
     @test string(JuMP.termination_status(built.model)) == "OPTIMIZE_NOT_CALLED"
+    observable_built = build_jump_model(first_compile; objective=:magnetization)
+    @test observable_built.compiled === first_compile
+    @test string(JuMP.termination_status(observable_built.model)) == "OPTIMIZE_NOT_CALLED"
+    @test_throws ArgumentError build_jump_model(first_compile; objective=:missing)
 
     incomplete = RelaxationSpecification(hamiltonian, basis;
         declared_moment_support=[UInt16[]])
