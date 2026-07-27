@@ -759,7 +759,7 @@ struct CompiledRelaxation
 end
 
 function _canonical_moment(word::Vector{UInt16}, symmetries)
-    generators = filter(symmetry -> symmetry.purpose in (:moment_zero, :moment_equality, :fourier_orbit), symmetries)
+    generators = filter(symmetry -> symmetry.purpose in (:moment_zero, :moment_equality), symmetries)
     isempty(generators) && return copy(word), 1.0 + 0.0im, :unchanged
 
     phases = Dict{Vector{UInt16},ComplexF64}(copy(word) => 1.0 + 0.0im)
@@ -880,6 +880,74 @@ function _artifact_fingerprint(spec, moments, blocks, rows, objective)
     return _fingerprint(String(take!(io)))
 end
 
+function _scaled_entry_sum(parts)
+    combined = Dict{Vector{UInt16},ComplexF64}()
+    for (scale, entry) in parts, (word, coefficient) in zip(entry.words, entry.coefficients)
+        combined[word] = get(combined, word, 0.0 + 0.0im) + scale * coefficient
+    end
+    words = sort!(collect(keys(combined)), lt=_word_lt)
+    filter!(word -> combined[word] != 0, words)
+    return AffineMomentEntry(words, ComplexF64[combined[word] for word in words])
+end
+
+function _basis_block_indices(sector::BasisSector, declarations)
+    generators = filter(declaration -> declaration.purpose == :basis_block, declarations)
+    isempty(generators) && return [(sector.name, collect(eachindex(sector.words)))]
+    groups = Dict{Tuple,Vector{Int}}()
+    for (index, word) in enumerate(sector.words)
+        signature = Tuple(begin
+            transformed, factor = _transform_word(word, generator)
+            transformed == word || throw(ArgumentError(
+                "basis_block generator $(generator.name) does not act diagonally on $(sector.name) word $index"))
+            isreal(factor) && real(factor) in (-1, 1) || throw(ArgumentError(
+                "basis_block generator $(generator.name) has non-character phase on $(sector.name) word $index"))
+            Int(real(factor))
+        end for generator in generators)
+        push!(get!(groups, signature, Int[]), index)
+    end
+    signatures = sort!(collect(keys(groups)))
+    return [(Symbol(sector.name, :_character_, join(signature, '_')), groups[signature])
+            for signature in signatures]
+end
+
+function _fourier_blocks(sector::BasisSector, entries, declarations)
+    generators = filter(declaration -> declaration.purpose == :fourier_orbit, declarations)
+    isempty(generators) && return nothing
+    length(generators) == 1 || throw(ArgumentError("Gate A supports one explicit Fourier generator per sector"))
+    metadata = sector.translation_orbits
+    metadata === nothing && throw(ArgumentError("Fourier sector $(sector.name) requires explicit translation orbit metadata"))
+    period = metadata.period
+    generator = only(generators)
+    orbit_ids = unique(metadata.orbit_ids)
+    orbits = [findall(==(orbit_id), metadata.orbit_ids) for orbit_id in orbit_ids]
+    all(length(orbit) == period for orbit in orbits) ||
+        throw(ArgumentError("Fourier sector $(sector.name) must list complete orbits of period $period"))
+    for orbit in orbits, position in 1:period
+        transformed, factor = _transform_word(sector.words[orbit[position]], generator)
+        expected = sector.words[orbit[mod1(position + 1, period)]]
+        transformed == expected && factor == 1 || throw(ArgumentError(
+            "Fourier generator $(generator.name) does not advance declared orbit in $(sector.name)"))
+    end
+    blocks = CompiledPSDBlock[]
+    for momentum in 0:(period - 1)
+        dimension = length(orbits)
+        transformed_entries = Matrix{AffineMomentEntry}(undef, dimension, dimension)
+        for left in 1:dimension, right in 1:dimension
+            parts = Tuple{ComplexF64,AffineMomentEntry}[]
+            for left_position in 1:period, right_position in 1:period
+                phase = cis(2pi * momentum * (left_position - right_position) / period) / period
+                push!(parts, (phase, entries[orbits[left][left_position], orbits[right][right_position]]))
+            end
+            transformed_entries[left, right] = _scaled_entry_sum(parts)
+        end
+        push!(blocks, CompiledPSDBlock(Symbol(sector.name, :_momentum_, momentum),
+            sector.psd_role, transformed_entries,
+            ["Fourier $(generator.name), momentum $momentum [$row,$column]"
+             for row in 1:dimension for column in 1:dimension]))
+    end
+    return blocks
+end
+
 """Compile an explicit relaxation without constructing or invoking an optimizer."""
 function compile_relaxation(spec::RelaxationSpecification)
     blocks = CompiledPSDBlock[]
@@ -899,9 +967,19 @@ function compile_relaxation(spec::RelaxationSpecification)
             union!(all_words, entry.words)
             zeroed += z; equated += e
         end
-        push!(blocks, CompiledPSDBlock(sector.name, sector.psd_role, entries,
-            ["B†B:$(sector.name)[$row,$column]" for row in 1:n for column in 1:n]))
-        push!(provenance, "moment PSD sector $(sector.name), dimension $n")
+        fourier_blocks = _fourier_blocks(sector, entries, spec.symmetries)
+        if fourier_blocks !== nothing
+            append!(blocks, fourier_blocks)
+            append!(provenance, ["Fourier PSD sector $(block.name), dimension $(size(block.entries, 1))"
+                                 for block in fourier_blocks])
+        else
+            for (block_name, indices) in _basis_block_indices(sector, spec.symmetries)
+                block_entries = entries[indices, indices]
+                push!(blocks, CompiledPSDBlock(block_name, sector.psd_role, block_entries,
+                    ["B†B:$(sector.name)[$row,$column]" for row in indices for column in indices]))
+                push!(provenance, "moment PSD sector $block_name, dimension $(length(indices))")
+            end
+        end
     end
 
     objective, z, e = _entry(spec.hamiltonian, spec.symmetries; provenance="Hamiltonian objective")

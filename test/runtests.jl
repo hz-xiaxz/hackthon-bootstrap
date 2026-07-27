@@ -178,6 +178,43 @@ end
     @test contains(string(closure_error), "moment closure failed")
 end
 
+@testset "Phase 1 explicit symmetry purposes and Fourier blocks" begin
+    block_hamiltonian = PauliPolynomial([UInt16[3] => 1.0])
+    block_generator = SymmetryDeclaration(:xy_parity, :basis_block, [1];
+                                          axis_sign=(-1, -1, 1))
+    block_spec = RelaxationSpecification(block_hamiltonian,
+        [BasisSector(:characters, [UInt16[], UInt16[1], UInt16[3]])];
+        symmetries=[block_generator])
+    blocked = compile_relaxation(block_spec)
+    @test blocked.diagnostics.psd_block_dimensions == [1, 2]
+    @test Set(getfield.(blocked.psd_blocks, :name)) ==
+          Set([:characters_character_1, Symbol("characters_character_-1")])
+
+    translation = SymmetryDeclaration(:translation_by_one, :fourier_orbit, [2, 1])
+    fourier_hamiltonian = PauliPolynomial([UInt16[1] => 1.0, UInt16[4] => 1.0])
+    fourier_sector = BasisSector(:translated_x, [UInt16[1], UInt16[4]];
+        translation_orbits=TranslationOrbitMetadata(2, [1, 1]))
+    fourier = compile_relaxation(RelaxationSpecification(fourier_hamiltonian,
+        [fourier_sector]; symmetries=[translation]))
+    @test fourier.diagnostics.psd_block_dimensions == [1, 1]
+    @test getfield.(fourier.psd_blocks, :name) ==
+          [:translated_x_momentum_0, :translated_x_momentum_1]
+    @test all(contains("Fourier"), fourier.diagnostics.constraint_provenance)
+
+    incomplete_orbit = BasisSector(:incomplete, [UInt16[1]];
+        translation_orbits=TranslationOrbitMetadata(2, [1]))
+    @test_throws ArgumentError compile_relaxation(RelaxationSpecification(
+        fourier_hamiltonian, [incomplete_orbit]; symmetries=[translation]))
+    @test_throws ArgumentError compile_relaxation(RelaxationSpecification(
+        fourier_hamiltonian, [BasisSector(:no_metadata, [UInt16[1], UInt16[4]])];
+        symmetries=[translation]))
+
+    bad_block = SymmetryDeclaration(:site_swap, :basis_block, [2, 1])
+    @test_throws ArgumentError compile_relaxation(RelaxationSpecification(
+        fourier_hamiltonian, [BasisSector(:nondiagonal, [UInt16[1], UInt16[4]])];
+        symmetries=[bad_block]))
+end
+
 @testset "Phase 1 Ising compile/build/solve split" begin
     compiled = compile_ising_relaxation(1.3, 0.7, 4; degree=1)
     @test compiled isa CompiledRelaxation
