@@ -118,6 +118,19 @@ end
     @test diagnostics.max_psd_block_dimension == 4
     @test diagnostics.real_embedded_dimensions == [8, 4, 8]
     @test diagnostics.state_optimality_moment_increment >= 0
+    pso_spec = RelaxationSpecification(
+        PauliPolynomial([UInt16[1] => 1.0]),
+        [BasisSector(:pso_moment, [UInt16[], UInt16[1], UInt16[2], UInt16[3]])];
+        psd_state_basis=[UInt16[], UInt16[2]])
+    pso_block = only(filter(block -> block.role == :state_optimality,
+                            compile_relaxation(pso_spec).psd_blocks))
+    @test isempty(pso_block.entries[1, 1].words)
+    @test pso_block.entries[1, 2].words == [UInt16[3]]
+    @test pso_block.entries[1, 2].coefficients == ComplexF64[im]
+    @test pso_block.entries[2, 1].coefficients == ComplexF64[-im]
+    @test pso_block.entries[2, 2].words == [UInt16[1]]
+    @test pso_block.entries[2, 2].coefficients == ComplexF64[-2]
+    @test eltype(pso_block.entries[2, 2].coefficients) == ComplexF64
     @test diagnostics.rdm_moment_increment > 0
     @test isempty(diagnostics.missing_support)
     @test diagnostics.scope == :numerical_relaxation
