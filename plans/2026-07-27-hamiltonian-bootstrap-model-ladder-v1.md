@@ -140,7 +140,7 @@ Table 2 中的 **31** 是 **`N=100, d=4, r=1` 在利用论文全部所列结构�
 ### Phase 0 — Baseline Lock and Terminology
 
 - [x] **0.1 [Done] 固定旧行为清单与测试基线。** 修改位置：`test/runtests.jl:1-34`。记录现有 Ising 两个 exact endpoints、现有 symmetry canonical representatives、`IsingMomentResult` 字段和 `GSB` 公开调用/返回形状；对不应在无许可证环境运行的 solver tests 使用现有测试策略而不改变数学期望。理由：后续重构必须能区分预期 API 演化与回归。
-- [ ] **0.2 [Not Started] 增加 Pauli 编码/乘法的纯结构测试。** 修改位置：`test/runtests.jl:1-34`；实现位置仍为 `src/basic_function.jl:143-206`。覆盖空 word、`XX=I`、`XY=iZ`、`YX=-iZ`、异站点排序、`realify` 差异和 `UInt16` 最大 site 检查。理由：后续六个各向异性/多体模型都依赖这一层，轴语义错误必须在进入模型前暴露。
+- [x] **0.2 [Done] 增加 Pauli 编码/乘法的纯结构测试。** 修改位置：`test/runtests.jl:1-34`；实现位置仍为 `src/basic_function.jl:143-206`。覆盖空 word、`XX=I`、`XY=iZ`、`YX=-iZ`、异站点排序、`realify` 差异和 `UInt16` 最大 site 检查。理由：后续六个各向异性/多体模型都依赖这一层，轴语义错误必须在进入模型前暴露。
 - [ ] **0.3 [Not Started] 固定术语与结果 scope。** 修改位置：优先 `src/basic_function.jl` 中新增最小 enum/symbol validation；公共后再修改 `src/QMBCertify.jl:15-20`。保证 diagnostics 和 solve result 显式区分 heuristic basis、equivalent reduction、strengthening、numerical solver bound、rigorously postvalidated certificate。理由：防止研究输出越权声明。
 
 **Phase 0 完成定义：** 纯 Pauli 测试确定性通过；旧 symmetry 与 Ising tests 不变；任何结果都不能在 scope 缺失时标记为 strict certificate。
