@@ -97,6 +97,11 @@ end
     @test length(diagnostics.fingerprint) == 16
     @test diagnostics.raw_basis_size == 4
     @test diagnostics.raw_bdagb_entries == 16
+    main_block = first_compile.psd_blocks[1]
+    @test main_block.entries[2, 3].words == [UInt16[3]]
+    @test main_block.entries[2, 3].coefficients == ComplexF64[im]
+    @test main_block.entries[3, 2].coefficients == ComplexF64[-im]
+    @test first_compile.moment_index[UInt16[3]] == second_compile.moment_index[UInt16[3]]
     @test diagnostics.linear_rows_raw == 3
     @test diagnostics.linear_rows_duplicate == 1
     @test diagnostics.linear_rows_zero == 1
