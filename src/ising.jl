@@ -55,79 +55,76 @@ function _ising_moment_data(basis, L, symmetry)
     return representatives, representative_index, entry_index, entry_coefficient
 end
 
+"""Build the explicit transverse-field Ising relaxation specification without solving it."""
+function ising_relaxation_specification(J::Real, h::Real, L::Int; degree::Int=1,
+        symmetry::PauliSymmetryModel=ising_chain_symmetry(),
+        certificate_scope=:numerical_relaxation)
+    basis_words = _pauli_basis(L, degree)
+    sector = BasisSector(:ising_moment, basis_words)
+
+    terms = Pair{Vector{UInt16},Float64}[]
+    for site in 1:L
+        next_site = mod1(site + 1, L)
+        push!(terms, UInt16[3 * (site - 1) + 3, 3 * (next_site - 1) + 3] => -Float64(J))
+        push!(terms, UInt16[3 * (site - 1) + 1] => -Float64(h))
+    end
+    hamiltonian = PauliPolynomial(terms)
+
+    declarations = SymmetryDeclaration[]
+    push!(declarations, SymmetryDeclaration(:global_ising_flip, :moment_zero, collect(1:L);
+                                             axis_sign=(1, -1, -1)))
+    if symmetry.translation
+        push!(declarations, SymmetryDeclaration(:translation, :moment_equality,
+                                                 [collect(2:L); 1]))
+    end
+    if symmetry.reflection
+        push!(declarations, SymmetryDeclaration(:reflection, :moment_equality,
+                                                 [1; collect(L:-1:2)]))
+    end
+    return RelaxationSpecification(hamiltonian, [sector]; symmetries=declarations,
+                                   certificate_scope=certificate_scope)
+end
+
+"""Compile the explicit Ising relaxation without creating a solver model."""
+function compile_ising_relaxation(J::Real, h::Real, L::Int; degree::Int=1,
+                                  symmetry::PauliSymmetryModel=ising_chain_symmetry())
+    return compile_relaxation(ising_relaxation_specification(J, h, L;
+        degree=degree, symmetry=symmetry))
+end
+
 """
     ising_ground_state_bound(J, h, L; degree=1, symmetry=ising_chain_symmetry(),
                              QUIET=true, mosek_setting=mosek_para())
 
 Compute a lower bound on the ground-state energy of the periodic chain
-`H = -J∑ᵢ ZᵢZᵢ₊₁ - h∑ᵢ Xᵢ` using a symmetry-reduced Pauli moment matrix.
-`degree` is the maximum number of sites in a word in the moment basis.
-
-Translation, reflection, and global Ising spin flip identify scalar moments,
-while positivity is imposed on the unreduced basis. Since the Hamiltonian is
-real, moments are restricted to their conjugation-invariant (real) sector;
-the complex Hermitian moment matrix is represented by a real PSD embedding.
+`H = -J∑ᵢ ZᵢZᵢ₊₁ - h∑ᵢ Xᵢ` using the explicit Gate A compiler and a
+symmetry-reduced Pauli moment matrix. The public arguments and result shape are
+preserved; compilation, JuMP model construction, and optimization are separate.
 """
 function ising_ground_state_bound(J::Real, h::Real, L::Int; degree::Int=1,
                                    symmetry::PauliSymmetryModel=ising_chain_symmetry(),
                                    QUIET::Bool=true,
                                    mosek_setting::mosek_para=mosek_para())
-    basis = _pauli_basis(L, degree)
-    representatives, representative_index, entry_index, entry_coefficient =
-        _ising_moment_data(basis, L, symmetry)
-
-    model = Model(optimizer_with_attributes(
-        Mosek.Optimizer,
-        "MSK_DPAR_INTPNT_CO_TOL_PFEAS" => mosek_setting.tol_pfeas,
-        "MSK_DPAR_INTPNT_CO_TOL_DFEAS" => mosek_setting.tol_dfeas,
-        "MSK_DPAR_INTPNT_CO_TOL_REL_GAP" => mosek_setting.tol_relgap,
+    compiled = compile_ising_relaxation(J, h, L; degree=degree, symmetry=symmetry)
+    attributes = Pair{String,Any}[
+        "MSK_DPAR_INTPNT_CO_TOL_PFEAS" => min(mosek_setting.tol_pfeas, 1e-9),
+        "MSK_DPAR_INTPNT_CO_TOL_DFEAS" => min(mosek_setting.tol_dfeas, 1e-9),
+        "MSK_DPAR_INTPNT_CO_TOL_REL_GAP" => min(mosek_setting.tol_relgap, 1e-9),
         "MSK_IPAR_NUM_THREADS" => mosek_setting.num_threads,
-    ))
-    set_optimizer_attribute(model, MOI.Silent(), QUIET)
-
-    @variable(model, moments[1:length(representatives)])
-    @constraint(model, moments[1] == 1)
-
-    n = length(basis)
-    real_part = Matrix{AffExpr}(undef, n, n)
-    imag_part = Matrix{AffExpr}(undef, n, n)
-    for row in 1:n, column in 1:n
-        index = entry_index[row, column]
-        if index == 0
-            real_part[row, column] = AffExpr(0.0)
-            imag_part[row, column] = AffExpr(0.0)
-        else
-            coefficient = entry_coefficient[row, column]
-            real_part[row, column] = coefficient.re * moments[index]
-            imag_part[row, column] = coefficient.im * moments[index]
-        end
-    end
-    real_embedding = [real_part -imag_part; imag_part real_part]
-    @constraint(model, Symmetric(real_embedding) in PSDCone())
-
-    function moment_for(word)
-        representative, coefficient = reduce!(UInt16.(word), L=L, symmetry=symmetry)
-        coefficient == 0 && return AffExpr(0.0)
-        index = get(representative_index, representative, 0)
-        index == 0 && throw(ArgumentError("degree=$degree does not generate Hamiltonian moment $word"))
-        isreal(coefficient) || throw(ArgumentError("Hamiltonian reduced to a non-real moment"))
-        return real(coefficient) * moments[index]
-    end
-
-    x_moment = moment_for(UInt16[1])
-    zz_moment = moment_for(UInt16[3, 6])
-    @objective(model, Min, L * (-float(J) * zz_moment - float(h) * x_moment))
-    optimize!(model)
-
-    status = termination_status(model)
-    status == MOI.OPTIMAL || error("Ising moment relaxation terminated with status $status")
-    energy = objective_value(model)
+    ]
+    built = build_jump_model(compiled; optimizer=Mosek.Optimizer,
+                             optimizer_attributes=attributes)
+    set_optimizer_attribute(built.model, MOI.Silent(), QUIET)
+    solved = solve_relaxation(built)
+    solved.status == MOI.OPTIMAL || error("Ising moment relaxation terminated with status $(solved.status)")
+    energy = solved.objective_value
+    n = compiled.diagnostics.raw_basis_size
     return IsingMomentResult(
         energy,
         energy / L,
-        status,
+        solved.status,
         n,
-        length(representatives),
+        compiled.diagnostics.scalar_moment_count,
         div(n * (n + 1), 2),
     )
 end

@@ -424,6 +424,636 @@ function eigen_circmat(supp, coe, L; symmetry=false, real_matrix=false)
     return seig, ceig
 end
 
+# -----------------------------------------------------------------------------
+# Explicit deterministic Pauli relaxation compiler (Gate A)
+# -----------------------------------------------------------------------------
+
+const PAULI_AXES = (UInt8(1), UInt8(2), UInt8(3))
+const CERTIFICATE_SCOPES = (:numerical_relaxation, :solver_bound, :rigorously_postvalidated)
+const SYMMETRY_PURPOSES = (:moment_zero, :moment_equality, :basis_block,
+                           :fourier_orbit, :redundant_block_equivalence)
+
+"""Canonical Pauli-polynomial term. Words use `3(site-1)+axis`, with `1=X,2=Y,3=Z`."""
+struct PauliTerm
+    word::Vector{UInt16}
+    coefficient::ComplexF64
+end
+
+_word_key(word::AbstractVector{<:Integer}) = join(word, ',')
+_word_lt(a::Vector{UInt16}, b::Vector{UInt16}) = isless((length(a), Tuple(a)), (length(b), Tuple(b)))
+
+function _checked_word(word)
+    result = UInt16[]
+    for label in word
+        label isa Integer || throw(ArgumentError("Pauli labels must be integers"))
+        1 <= label <= typemax(UInt16) || throw(ArgumentError("Pauli label $label is outside UInt16 site encoding"))
+        push!(result, UInt16(label))
+    end
+    reduced, phase = pauli_product(result)
+    return reduced, phase
+end
+
+"""Multiply a sequence of encoded Pauli factors without applying physical symmetries."""
+function pauli_product(word::AbstractVector{<:Integer}; realify::Bool=false)
+    checked = UInt16[]
+    for label in word
+        label isa Integer || throw(ArgumentError("Pauli labels must be integers"))
+        1 <= label <= typemax(UInt16) || throw(ArgumentError("Pauli label $label is outside UInt16 site encoding"))
+        push!(checked, UInt16(label))
+    end
+    isempty(checked) && return UInt16[], 1
+    reduce1!(checked)
+    reduce3!(checked)
+    checked, coefficient = reduce2!(checked, realify=realify)
+    reduce3!(checked)
+    return checked, coefficient
+end
+
+"""A deterministic canonical sum of Pauli terms."""
+struct PauliPolynomial
+    terms::Vector{PauliTerm}
+    hermitian::Bool
+end
+
+function PauliPolynomial(terms; hermitian::Bool=true)
+    coefficients = Dict{Vector{UInt16},ComplexF64}()
+    for item in terms
+        word, coefficient = if item isa PauliTerm
+            item.word, item.coefficient
+        elseif item isa Pair
+            item.first, item.second
+        elseif item isa Tuple && length(item) == 2
+            item[1], item[2]
+        else
+            throw(ArgumentError("polynomial terms must be PauliTerm, Pair, or (word, coefficient)"))
+        end
+        isfinite(real(coefficient)) && isfinite(imag(coefficient)) ||
+            throw(ArgumentError("Pauli polynomial coefficients must be finite"))
+        canonical, phase = _checked_word(word)
+        coefficients[canonical] = get(coefficients, canonical, 0.0 + 0.0im) + ComplexF64(coefficient * phase)
+    end
+    canonical_terms = PauliTerm[]
+    for (word, coefficient) in coefficients
+        coefficient == 0 && continue
+        hermitian && !iszero(imag(coefficient)) &&
+            throw(ArgumentError("Hermitian Pauli polynomial has non-real coefficient $coefficient on word $word"))
+        push!(canonical_terms, PauliTerm(copy(word), coefficient))
+    end
+    sort!(canonical_terms, lt=(a, b) -> _word_lt(a.word, b.word))
+    return PauliPolynomial(canonical_terms, hermitian)
+end
+PauliPolynomial() = PauliPolynomial(Pair{Vector{UInt16},Float64}[])
+
+function _poly_dict(polynomial::PauliPolynomial)
+    Dict(term.word => term.coefficient for term in polynomial.terms)
+end
+
+function _polynomial_product(left::PauliPolynomial, right::PauliPolynomial; hermitian=false)
+    terms = Pair{Vector{UInt16},ComplexF64}[]
+    for a in left.terms, b in right.terms
+        word, phase = pauli_product([a.word; b.word])
+        push!(terms, word => a.coefficient * b.coefficient * phase)
+    end
+    return PauliPolynomial(terms; hermitian=hermitian)
+end
+
+function _polynomial_linear_combination(parts; hermitian=false)
+    terms = Pair{Vector{UInt16},ComplexF64}[]
+    for (scale, polynomial) in parts, term in polynomial.terms
+        push!(terms, term.word => scale * term.coefficient)
+    end
+    return PauliPolynomial(terms; hermitian=hermitian)
+end
+
+"""Optional user-declared translation orbit metadata; no orbit is inferred."""
+struct TranslationOrbitMetadata
+    period::Int
+    orbit_ids::Vector{Int}
+    function TranslationOrbitMetadata(period, orbit_ids)
+        period > 0 || throw(ArgumentError("translation period must be positive"))
+        all(>(0), orbit_ids) || throw(ArgumentError("translation orbit ids must be positive"))
+        new(period, Int.(orbit_ids))
+    end
+end
+
+"""A named, explicitly ordered PSD basis sector."""
+struct BasisSector
+    name::Symbol
+    words::Vector{Vector{UInt16}}
+    psd_role::Symbol
+    translation_orbits::Union{Nothing,TranslationOrbitMetadata}
+end
+
+function BasisSector(name, words; psd_role=:moment, translation_orbits=nothing)
+    name = Symbol(name)
+    isempty(String(name)) && throw(ArgumentError("basis sector name cannot be empty"))
+    psd_role in (:moment, :state_optimality, :auxiliary) || throw(ArgumentError("invalid PSD role $psd_role"))
+    canonical = Vector{UInt16}[]
+    seen = Set{Vector{UInt16}}()
+    for word in words
+        reduced, phase = _checked_word(word)
+        phase == 1 || throw(ArgumentError("basis word $word is not a canonical Hermitian Pauli word"))
+        reduced in seen && throw(ArgumentError("duplicate word $reduced in basis sector $name"))
+        push!(seen, reduced)
+        push!(canonical, reduced)
+    end
+    isempty(canonical) && throw(ArgumentError("basis sector $name is empty"))
+    translation_orbits !== nothing && length(translation_orbits.orbit_ids) != length(canonical) &&
+        throw(ArgumentError("translation orbit metadata length does not match sector $name"))
+    return BasisSector(name, canonical, psd_role, translation_orbits)
+end
+
+"""
+An explicit symmetry generator and its single declared use. `site_map[i]` and
+`axis_map[a]` define its action; `axis_sign[a]` supplies a ±1 factor.
+"""
+struct SymmetryDeclaration
+    name::Symbol
+    purpose::Symbol
+    site_map::Vector{Int}
+    axis_map::NTuple{3,UInt8}
+    axis_sign::NTuple{3,Int8}
+end
+
+function SymmetryDeclaration(name, purpose, site_map;
+                             axis_map=(1, 2, 3), axis_sign=(1, 1, 1))
+    purpose = Symbol(purpose)
+    purpose in SYMMETRY_PURPOSES || throw(ArgumentError("invalid symmetry purpose $purpose"))
+    sites = Int.(site_map)
+    sort(sites) == collect(1:length(sites)) || throw(ArgumentError("site_map must be a permutation of 1:L"))
+    amap = Tuple(UInt8.(axis_map))
+    sort(collect(amap)) == UInt8[1, 2, 3] || throw(ArgumentError("axis_map must permute X,Y,Z"))
+    signs = Tuple(Int8.(axis_sign))
+    all(sign -> sign in (-1, 1), signs) || throw(ArgumentError("axis signs must be ±1"))
+    return SymmetryDeclaration(Symbol(name), purpose, sites, amap, signs)
+end
+
+function _transform_word(word::Vector{UInt16}, symmetry::SymmetryDeclaration)
+    transformed = UInt16[]
+    coefficient = 1
+    for label in word
+        site = cld(Int(label), 3)
+        site <= length(symmetry.site_map) || throw(ArgumentError("symmetry $(symmetry.name) does not cover site $site"))
+        axis = Int(mod1(label, 3))
+        coefficient *= symmetry.axis_sign[axis]
+        push!(transformed, UInt16(3 * (symmetry.site_map[site] - 1) + symmetry.axis_map[axis]))
+    end
+    canonical, phase = pauli_product(transformed)
+    return canonical, coefficient * phase
+end
+
+function _check_invariance(polynomial::PauliPolynomial, symmetry::SymmetryDeclaration)
+    transformed = Pair{Vector{UInt16},ComplexF64}[]
+    for term in polynomial.terms
+        word, coefficient = _transform_word(term.word, symmetry)
+        push!(transformed, word => coefficient * term.coefficient)
+    end
+    transformed_polynomial = PauliPolynomial(transformed; hermitian=polynomial.hermitian)
+    _poly_dict(transformed_polynomial) == _poly_dict(polynomial) ||
+        throw(ArgumentError("Hamiltonian is not invariant under declared symmetry $(symmetry.name) ($(symmetry.purpose))"))
+end
+
+"""An explicitly ordered subsystem for a mechanically expanded small RDM."""
+struct RDMRegion
+    name::Symbol
+    sites::Vector{Int}
+    blocks::Union{Nothing,Vector{Vector{Int}}}
+end
+function RDMRegion(name, sites; blocks=nothing)
+    sites = Int.(sites)
+    !isempty(sites) && all(>(0), sites) && length(unique(sites)) == length(sites) ||
+        throw(ArgumentError("RDM sites must be distinct positive integers"))
+    length(sites) <= 4 || throw(ArgumentError("Gate A explicit RDM expansion supports at most four sites"))
+    return RDMRegion(Symbol(name), sites, blocks)
+end
+
+"""Complete explicit input to the Gate A compiler."""
+struct RelaxationSpecification
+    hamiltonian::PauliPolynomial
+    basis::Vector{BasisSector}
+    symmetries::Vector{SymmetryDeclaration}
+    linear_tests::Vector{PauliPolynomial}
+    psd_state_basis::Vector{Vector{UInt16}}
+    rdm_regions::Vector{RDMRegion}
+    observables::Dict{Symbol,PauliPolynomial}
+    normalization::Float64
+    certificate_scope::Symbol
+    declared_moment_support::Union{Nothing,Vector{Vector{UInt16}}}
+end
+
+function RelaxationSpecification(hamiltonian, basis;
+        symmetries=SymmetryDeclaration[], linear_tests=PauliPolynomial[],
+        psd_state_basis=Vector{UInt16}[], rdm_regions=RDMRegion[],
+        observables=Dict{Symbol,PauliPolynomial}(), normalization=1.0,
+        certificate_scope=:numerical_relaxation, declared_moment_support=nothing)
+    hamiltonian isa PauliPolynomial && hamiltonian.hermitian || throw(ArgumentError("Hamiltonian must be a Hermitian PauliPolynomial"))
+    isempty(basis) && throw(ArgumentError("at least one explicit basis sector is required"))
+    names = getfield.(basis, :name)
+    length(unique(names)) == length(names) || throw(ArgumentError("basis sector names must be unique"))
+    scope = Symbol(certificate_scope)
+    scope in CERTIFICATE_SCOPES || throw(ArgumentError("invalid certificate scope $scope"))
+    scope == :rigorously_postvalidated && throw(ArgumentError("rigorously_postvalidated scope requires an independent postvalidation result"))
+    isfinite(normalization) && normalization != 0 || throw(ArgumentError("normalization must be finite and nonzero"))
+    maxsite = maximum((cld(Int(term.word[end]), 3) for term in hamiltonian.terms if !isempty(term.word)); init=0)
+    for sector in basis, word in sector.words
+        isempty(word) || (maxsite = max(maxsite, cld(Int(word[end]), 3)))
+    end
+    for symmetry in symmetries
+        length(symmetry.site_map) >= maxsite || throw(ArgumentError("symmetry $(symmetry.name) does not cover all used sites"))
+        _check_invariance(hamiltonian, symmetry)
+    end
+    psd_words = Vector{UInt16}[]
+    for word in psd_state_basis
+        canonical, phase = _checked_word(word)
+        phase == 1 || throw(ArgumentError("PSD state-optimality basis contains a phased word"))
+        push!(psd_words, canonical)
+    end
+    support = declared_moment_support === nothing ? nothing : [_checked_word(word)[1] for word in declared_moment_support]
+    return RelaxationSpecification(hamiltonian, collect(basis), collect(symmetries), collect(linear_tests),
+        psd_words, collect(rdm_regions), Dict{Symbol,PauliPolynomial}(observables), Float64(normalization), scope, support)
+end
+
+struct AffineMomentEntry
+    words::Vector{Vector{UInt16}}
+    coefficients::Vector{ComplexF64}
+end
+
+struct CompiledPSDBlock
+    name::Symbol
+    role::Symbol
+    entries::Matrix{AffineMomentEntry}
+    provenance::Vector{String}
+end
+
+struct CompilationDiagnostics
+    raw_basis_size::Int
+    canonical_basis_size::Int
+    raw_bdagb_entries::Int
+    zeroed_moments::Int
+    equated_moments::Int
+    scalar_moment_count::Int
+    linear_rows_raw::Int
+    linear_rows_zero::Int
+    linear_rows_duplicate::Int
+    linear_rows_independent::Int
+    psd_block_count::Int
+    psd_block_dimensions::Vector{Int}
+    max_psd_block_dimension::Int
+    real_embedded_dimensions::Vector{Int}
+    rdm_moment_increment::Int
+    state_optimality_moment_increment::Int
+    missing_support::Vector{String}
+    constraint_provenance::Vector{String}
+    scope::Symbol
+    fingerprint::String
+end
+
+struct CompiledRelaxation
+    specification::RelaxationSpecification
+    moments::Vector{Vector{UInt16}}
+    moment_index::Dict{Vector{UInt16},Int}
+    objective::AffineMomentEntry
+    observables::Dict{Symbol,AffineMomentEntry}
+    psd_blocks::Vector{CompiledPSDBlock}
+    linear_rows::Vector{AffineMomentEntry}
+    diagnostics::CompilationDiagnostics
+end
+
+function _canonical_moment(word::Vector{UInt16}, symmetries)
+    generators = filter(symmetry -> symmetry.purpose in (:moment_zero, :moment_equality, :fourier_orbit), symmetries)
+    isempty(generators) && return copy(word), 1.0 + 0.0im, :unchanged
+
+    phases = Dict{Vector{UInt16},ComplexF64}(copy(word) => 1.0 + 0.0im)
+    queue = Vector{Vector{UInt16}}([copy(word)])
+    cursor = 1
+    while cursor <= length(queue)
+        current = queue[cursor]
+        current_phase = phases[current]
+        cursor += 1
+        for symmetry in generators
+            transformed, factor = _transform_word(current, symmetry)
+            transformed_phase = current_phase * factor
+            if haskey(phases, transformed)
+                phases[transformed] == transformed_phase ||
+                    return UInt16[], 0.0 + 0.0im, :symmetry_zero
+            else
+                phases[transformed] = transformed_phase
+                push!(queue, transformed)
+            end
+        end
+    end
+    canonical = first(sort!(collect(keys(phases)); lt=_word_lt))
+    return copy(canonical), phases[canonical], canonical == word ? :unchanged : :equated
+end
+
+function _entry(polynomial::PauliPolynomial, symmetries; provenance="")
+    combined = Dict{Vector{UInt16},ComplexF64}()
+    zeroed = equated = 0
+    for term in polynomial.terms
+        word, factor, reason = _canonical_moment(term.word, symmetries)
+        if factor == 0
+            zeroed += 1
+        else
+            reason == :equated && (equated += 1)
+            combined[word] = get(combined, word, 0.0 + 0.0im) + factor * term.coefficient
+        end
+    end
+    words = sort!(collect(keys(combined)), lt=_word_lt)
+    filter!(word -> combined[word] != 0, words)
+    return AffineMomentEntry(words, ComplexF64[combined[word] for word in words]), zeroed, equated
+end
+
+_entry_for_product(left, right, symmetries) = _entry(_polynomial_product(
+    PauliPolynomial([left => 1.0]), PauliPolynomial([right => 1.0]); hermitian=false), symmetries)
+
+function _row_signature(entry::AffineMomentEntry)
+    isempty(entry.words) && return ""
+    first_nonzero = findfirst(!iszero, entry.coefficients)
+    first_nonzero === nothing && return ""
+    scale = entry.coefficients[first_nonzero]
+    join((_word_key(word) * "=" * repr(coefficient / scale)
+          for (word, coefficient) in zip(entry.words, entry.coefficients)), ';')
+end
+
+function _pauli_matrix(axis::Int)
+    axis == 0 && return ComplexF64[1 0; 0 1]
+    axis == 1 && return ComplexF64[0 1; 1 0]
+    axis == 2 && return ComplexF64[0 -im; im 0]
+    return ComplexF64[1 0; 0 -1]
+end
+
+function _rdm_entries(region::RDMRegion, symmetries)
+    k = length(region.sites)
+    dimension = 2^k
+    accum = [Dict{Vector{UInt16},ComplexF64}() for _ in 1:dimension, _ in 1:dimension]
+    zeroed = equated = 0
+    for axes in Iterators.product(ntuple(_ -> 0:3, k)...)
+        word = UInt16[3 * (region.sites[i] - 1) + axes[i] for i in 1:k if axes[i] != 0]
+        canonical, factor, reason = _canonical_moment(word, symmetries)
+        factor == 0 && (zeroed += 1; continue)
+        reason == :equated && (equated += 1)
+        matrix = _pauli_matrix(axes[1])
+        for i in 2:k
+            matrix = kron(matrix, _pauli_matrix(axes[i]))
+        end
+        matrix ./= 2^k
+        for row in 1:dimension, column in 1:dimension
+            coefficient = factor * matrix[row, column]
+            coefficient == 0 && continue
+            accum[row, column][canonical] = get(accum[row, column], canonical, 0.0 + 0.0im) + coefficient
+        end
+    end
+    entries = Matrix{AffineMomentEntry}(undef, dimension, dimension)
+    for row in 1:dimension, column in 1:dimension
+        words = sort!(collect(keys(accum[row, column])), lt=_word_lt)
+        entries[row, column] = AffineMomentEntry(words, [accum[row, column][word] for word in words])
+    end
+    return entries, zeroed, equated
+end
+
+function _fingerprint(text::AbstractString)
+    hash = UInt64(0xcbf29ce484222325)
+    for byte in codeunits(text)
+        hash = (hash ⊻ UInt64(byte)) * UInt64(0x100000001b3)
+    end
+    return lowercase(string(hash, base=16, pad=16))
+end
+
+function _artifact_fingerprint(spec, moments, blocks, rows, objective)
+    io = IOBuffer()
+    print(io, "scope=", spec.certificate_scope, ";normalization=", repr(spec.normalization), ';')
+    for term in spec.hamiltonian.terms
+        print(io, "H:", _word_key(term.word), '=', repr(term.coefficient), ';')
+    end
+    for word in moments
+        print(io, "M:", _word_key(word), ';')
+    end
+    for block in blocks
+        print(io, "P:", block.name, ':', size(block.entries), ';')
+        for entry in block.entries, (word, coefficient) in zip(entry.words, entry.coefficients)
+            print(io, _word_key(word), '=', repr(coefficient), ';')
+        end
+    end
+    for row in rows
+        print(io, "L:", _row_signature(row), ';')
+    end
+    print(io, "O:", _row_signature(objective))
+    return _fingerprint(String(take!(io)))
+end
+
+"""Compile an explicit relaxation without constructing or invoking an optimizer."""
+function compile_relaxation(spec::RelaxationSpecification)
+    blocks = CompiledPSDBlock[]
+    all_words = Set{Vector{UInt16}}([UInt16[]])
+    zeroed = equated = 0
+    provenance = String[]
+    raw_basis_size = sum(length(sector.words) for sector in spec.basis)
+
+    for sector in spec.basis
+        n = length(sector.words)
+        entries = Matrix{AffineMomentEntry}(undef, n, n)
+        for row in 1:n, column in 1:n
+            product_word, phase = pauli_product([reverse(sector.words[row]); sector.words[column]])
+            polynomial = PauliPolynomial([product_word => phase]; hermitian=false)
+            entry, z, e = _entry(polynomial, spec.symmetries; provenance="B†B $(sector.name)[$row,$column]")
+            entries[row, column] = entry
+            union!(all_words, entry.words)
+            zeroed += z; equated += e
+        end
+        push!(blocks, CompiledPSDBlock(sector.name, sector.psd_role, entries,
+            ["B†B:$(sector.name)[$row,$column]" for row in 1:n for column in 1:n]))
+        push!(provenance, "moment PSD sector $(sector.name), dimension $n")
+    end
+
+    objective, z, e = _entry(spec.hamiltonian, spec.symmetries; provenance="Hamiltonian objective")
+    zeroed += z; equated += e; union!(all_words, objective.words)
+    observables = Dict{Symbol,AffineMomentEntry}()
+    for name in sort!(collect(keys(spec.observables)))
+        entry, z, e = _entry(spec.observables[name], spec.symmetries; provenance="observable $name")
+        observables[name] = entry; zeroed += z; equated += e; union!(all_words, entry.words)
+    end
+
+    raw_linear = length(spec.linear_tests)
+    zero_linear = duplicate_linear = 0
+    linear_rows = AffineMomentEntry[]
+    signatures = Set{String}()
+    for (test_index, test) in enumerate(spec.linear_tests)
+        commutator = _polynomial_linear_combination(((1.0, _polynomial_product(spec.hamiltonian, test)),
+                                                     (-1.0, _polynomial_product(test, spec.hamiltonian))); hermitian=false)
+        entry, z, e = _entry(commutator, spec.symmetries; provenance="linear test $test_index")
+        zeroed += z; equated += e
+        signature = _row_signature(entry)
+        if isempty(signature)
+            zero_linear += 1
+        elseif signature in signatures
+            duplicate_linear += 1
+        else
+            push!(signatures, signature); push!(linear_rows, entry); union!(all_words, entry.words)
+            push!(provenance, "linear state optimality test $test_index")
+        end
+    end
+
+    before_pso = length(all_words)
+    if !isempty(spec.psd_state_basis)
+        n = length(spec.psd_state_basis)
+        entries = Matrix{AffineMomentEntry}(undef, n, n)
+        for row in 1:n, column in row:n
+            v = PauliPolynomial([spec.psd_state_basis[row] => 1.0])
+            wdag = PauliPolynomial([reverse(spec.psd_state_basis[column]) => 1.0])
+            vwdag = _polynomial_product(v, wdag)
+            expression = _polynomial_linear_combination((
+                (1.0, _polynomial_product(_polynomial_product(v, spec.hamiltonian), wdag)),
+                (-0.5, _polynomial_product(spec.hamiltonian, vwdag)),
+                (-0.5, _polynomial_product(vwdag, spec.hamiltonian))), hermitian=false)
+            entry, z, e = _entry(expression, spec.symmetries; provenance="PSD state optimality[$row,$column]")
+            entries[row, column] = entry
+            if row != column
+                entries[column, row] = AffineMomentEntry(copy(entry.words), conj.(entry.coefficients))
+            end
+            zeroed += z; equated += e; union!(all_words, entry.words)
+        end
+        push!(blocks, CompiledPSDBlock(:state_optimality, :state_optimality, entries,
+            ["PSD state optimality[$row,$column]" for row in 1:n for column in 1:n]))
+        push!(provenance, "PSD state optimality, dimension $n")
+    end
+    pso_increment = length(all_words) - before_pso
+
+    before_rdm = length(all_words)
+    for region in spec.rdm_regions
+        entries, z, e = _rdm_entries(region, spec.symmetries)
+        zeroed += z; equated += e
+        for entry in entries; union!(all_words, entry.words); end
+        declared_blocks = region.blocks === nothing ? [collect(axes(entries, 1))] : region.blocks
+        flattened = vcat(declared_blocks...)
+        sort(flattened) == collect(axes(entries, 1)) && length(unique(flattened)) == length(flattened) ||
+            throw(ArgumentError("RDM $(region.name) blocks must partition matrix indices 1:$(size(entries, 1))"))
+        for (block_index, indices) in enumerate(declared_blocks)
+            block_entries = entries[indices, indices]
+            block_name = length(declared_blocks) == 1 ? region.name : Symbol(region.name, :_block_, block_index)
+            push!(blocks, CompiledPSDBlock(block_name, :rdm, block_entries,
+                ["RDM $(region.name) block $block_index [$row,$column]" for row in indices for column in indices]))
+            push!(provenance, "RDM $(region.name) block $block_index, dimension $(length(indices))")
+        end
+    end
+    rdm_increment = length(all_words) - before_rdm
+
+    moments = sort!(collect(all_words), lt=_word_lt)
+    missing = String[]
+    if spec.declared_moment_support !== nothing
+        declared = Set(spec.declared_moment_support)
+        for word in moments
+            word in declared || push!(missing, "missing canonical moment [$(_word_key(word))]")
+        end
+        isempty(missing) || throw(ArgumentError("moment closure failed: " * join(missing, "; ")))
+    end
+    index = Dict(word => i for (i, word) in enumerate(moments))
+
+    # Deterministic algebraic Hermiticity checks for every PSD artifact.
+    for block in blocks, row in axes(block.entries, 1), column in axes(block.entries, 2)
+        lhs = Dict(zip(block.entries[row, column].words, block.entries[row, column].coefficients))
+        rhs = Dict(word => conj(coefficient) for (word, coefficient) in
+                   zip(block.entries[column, row].words, block.entries[column, row].coefficients))
+        lhs == rhs || throw(ArgumentError("PSD Hermiticity failed in $(block.name) at ($row,$column)"))
+    end
+    isempty(blocks) && throw(ArgumentError("relaxation has no PSD block"))
+    any(block -> size(block.entries, 1) == 0, blocks) && throw(ArgumentError("empty PSD block"))
+
+    dimensions = [size(block.entries, 1) for block in blocks]
+    fingerprint = _artifact_fingerprint(spec, moments, blocks, linear_rows, objective)
+    diagnostics = CompilationDiagnostics(raw_basis_size, raw_basis_size,
+        sum(length(sector.words)^2 for sector in spec.basis), zeroed, equated,
+        length(moments), raw_linear, zero_linear, duplicate_linear, length(linear_rows),
+        length(blocks), dimensions, maximum(dimensions), 2 .* dimensions,
+        rdm_increment, pso_increment, missing, provenance, spec.certificate_scope, fingerprint)
+    return CompiledRelaxation(spec, moments, index, objective, observables, blocks, linear_rows, diagnostics)
+end
+
+struct BuiltRelaxationModel
+    model::Model
+    moments
+    compiled::CompiledRelaxation
+end
+
+function _jump_entry(entry::AffineMomentEntry, moments)
+    real_expression = AffExpr(0.0)
+    imaginary_expression = AffExpr(0.0)
+    for (word, coefficient) in zip(entry.words, entry.coefficients)
+        index = moments.index[word]
+        add_to_expression!(real_expression, real(coefficient), moments.variables[index])
+        add_to_expression!(imaginary_expression, imag(coefficient), moments.variables[index])
+    end
+    return real_expression, imaginary_expression
+end
+
+"""Build JuMP variables and constraints from a compiled artifact, without solving it."""
+function build_jump_model(compiled::CompiledRelaxation; optimizer=nothing, optimizer_attributes=Pair[])
+    model = optimizer === nothing ? Model() : Model(optimizer_with_attributes(optimizer, optimizer_attributes...))
+    @variable(model, moment_variables[1:length(compiled.moments)])
+    moment_handle = (variables=moment_variables, index=compiled.moment_index)
+    @constraint(model, moment_variables[compiled.moment_index[UInt16[]]] == 1)
+    for row in compiled.linear_rows
+        real_row, imaginary_row = _jump_entry(row, moment_handle)
+        @constraint(model, real_row == 0)
+        @constraint(model, imaginary_row == 0)
+    end
+    for block in compiled.psd_blocks
+        n = size(block.entries, 1)
+        real_part = Matrix{AffExpr}(undef, n, n)
+        imaginary_part = Matrix{AffExpr}(undef, n, n)
+        for row in 1:n, column in 1:n
+            real_part[row, column], imaginary_part[row, column] = _jump_entry(block.entries[row, column], moment_handle)
+        end
+        @constraint(model, Symmetric([real_part -imaginary_part; imaginary_part real_part]) in PSDCone())
+    end
+    objective, imaginary_objective = _jump_entry(compiled.objective, moment_handle)
+    isempty(imaginary_objective.terms) && imaginary_objective.constant == 0 ||
+        throw(ArgumentError("Hamiltonian objective is not real"))
+    @objective(model, Min, objective / compiled.specification.normalization)
+    return BuiltRelaxationModel(model, moment_handle, compiled)
+end
+
+struct RelaxationSolveResult
+    objective_value::Float64
+    status
+    primal_status
+    scope::Symbol
+    fingerprint::String
+end
+
+"""Optimize a previously built model and report an explicitly scoped numerical result."""
+function solve_relaxation(built::BuiltRelaxationModel)
+    optimize!(built.model)
+    status = termination_status(built.model)
+    has_values(built.model) || error("relaxation terminated without a solution: $status")
+    scope = built.compiled.specification.certificate_scope == :numerical_relaxation ? :solver_bound : built.compiled.specification.certificate_scope
+    return RelaxationSolveResult(objective_value(built.model), status, primal_status(built.model),
+                                 scope, built.compiled.diagnostics.fingerprint)
+end
+
+"""Construct the paper's explicit 1D sparse basis and Table 2 structural counts."""
+function heisenberg_table2_benchmark(N::Int=100, d::Int=4, r::Int=1)
+    N > 0 && 0 <= d <= N && r >= 1 || throw(ArgumentError("invalid Table 2 parameters"))
+    words = Vector{UInt16}[UInt16[]]
+    for length_ in 1:d, start in 1:N
+        for axes in Iterators.product(ntuple(_ -> 1:3, length_)...)
+            push!(words, UInt16[3 * (mod(start + offset - 2, N)) + axes[offset] for offset in 1:length_])
+        end
+    end
+    if d >= 2 && r >= 2
+        for distance in 2:r, start in 1:N, left_axis in 1:3, right_axis in 1:3
+            push!(words, UInt16[3 * (start - 1) + left_axis,
+                                3 * mod(start + distance - 1, N) + right_axis])
+        end
+    end
+    basis = BasisSector(:table2_sparse_basis, words; psd_role=:moment)
+    sparse_size = length(words)
+    max_block = iseven(d) ? div(3^(d + 1) + 5, 8) : div(3^(d + 1) - 1, 8)
+    return (basis=basis, sparse_basis_size=sparse_size,
+            max_psd_block_dimension=max_block,
+            original_dimension=div((3N)^(d + 1) - 1, 3N - 1),
+            equality_reduced_dimension=sum(binomial(N, i) * 3^i for i in 0:d))
+end
+
 function add_SU2_equality!(model, tsupp, cons; L=0, lattice="chain")
     ind = findall(item->length(item) == 4 && all(smod.(item, 3) .== 1), tsupp)
     for item in tsupp[ind]

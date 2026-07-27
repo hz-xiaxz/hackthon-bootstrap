@@ -17,7 +17,13 @@ export certify_qmb, certify_qmb_corr, dmrg_heisenberg_rat
 export GSB, PFB, slabel, reduce!, mosek_para
 export AbstractSymmetryModel, PauliSymmetryModel, heisenberg_symmetry, ising_chain_symmetry
 export symmetry_reduce_support
-export IsingMomentResult, ising_ground_state_bound
+export PauliTerm, PauliPolynomial, pauli_product
+export TranslationOrbitMetadata, BasisSector, SymmetryDeclaration, RDMRegion
+export RelaxationSpecification, AffineMomentEntry, CompiledPSDBlock
+export CompilationDiagnostics, CompiledRelaxation, BuiltRelaxationModel, RelaxationSolveResult
+export compile_relaxation, build_jump_model, solve_relaxation, heisenberg_table2_benchmark
+export IsingMomentResult, ising_relaxation_specification, compile_ising_relaxation
+export ising_ground_state_bound
 
 mutable struct qmb_data
     correlation1
