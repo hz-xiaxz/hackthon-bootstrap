@@ -429,9 +429,25 @@ end
 # -----------------------------------------------------------------------------
 
 const PAULI_AXES = (UInt8(1), UInt8(2), UInt8(3))
-const CERTIFICATE_SCOPES = (:numerical_relaxation, :solver_bound, :rigorously_postvalidated)
+const BASIS_POLICY_KINDS = (:heuristic_basis,)
+const REDUCTION_KINDS = (:equivalent_reduction,)
+const STRENGTHENING_KINDS = (:valid_strengthening,)
+const CERTIFICATE_SCOPES = (:numerical_relaxation, :solver_bound, :numerical_diagnostic,
+                            :rigorously_postvalidated)
+const RELAXATION_TERMINOLOGY = (basis_policy=BASIS_POLICY_KINDS,
+    reduction=REDUCTION_KINDS, strengthening=STRENGTHENING_KINDS,
+    result_scope=CERTIFICATE_SCOPES)
 const SYMMETRY_PURPOSES = (:moment_zero, :moment_equality, :basis_block,
                            :fourier_orbit, :redundant_block_equivalence)
+
+"""Validate one of the four non-interchangeable relaxation terminology classes."""
+function validate_relaxation_label(kind::Symbol, value)
+    hasproperty(RELAXATION_TERMINOLOGY, kind) || throw(ArgumentError("unknown terminology class $kind"))
+    label = Symbol(value)
+    label in getproperty(RELAXATION_TERMINOLOGY, kind) ||
+        throw(ArgumentError("invalid $kind label $label"))
+    return label
+end
 
 """Canonical Pauli-polynomial term. Words use `3(site-1)+axis`, with `1=X,2=Y,3=Z`."""
 struct PauliTerm
@@ -650,8 +666,7 @@ function RelaxationSpecification(hamiltonian, basis;
     isempty(basis) && throw(ArgumentError("at least one explicit basis sector is required"))
     names = getfield.(basis, :name)
     length(unique(names)) == length(names) || throw(ArgumentError("basis sector names must be unique"))
-    scope = Symbol(certificate_scope)
-    scope in CERTIFICATE_SCOPES || throw(ArgumentError("invalid certificate scope $scope"))
+    scope = validate_relaxation_label(:result_scope, certificate_scope)
     scope == :rigorously_postvalidated && throw(ArgumentError("rigorously_postvalidated scope requires an independent postvalidation result"))
     isfinite(normalization) && normalization != 0 || throw(ArgumentError("normalization must be finite and nonzero"))
     maxsite = maximum((cld(Int(term.word[end]), 3) for term in hamiltonian.terms if !isempty(term.word)); init=0)

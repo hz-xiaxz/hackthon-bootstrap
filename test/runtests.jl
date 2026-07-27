@@ -17,6 +17,12 @@ using QMBCertify
     @test fieldnames(IsingMomentResult) == (:energy, :energy_density, :status,
         :basis_size, :moment_count, :raw_entry_count)
     @test hasmethod(GSB, Tuple{Vector{Vector{Int}}, Vector{Float64}, Int, Int})
+    @test validate_relaxation_label(:basis_policy, :heuristic_basis) == :heuristic_basis
+    @test validate_relaxation_label(:reduction, :equivalent_reduction) == :equivalent_reduction
+    @test validate_relaxation_label(:strengthening, :valid_strengthening) == :valid_strengthening
+    @test validate_relaxation_label(:result_scope, :numerical_diagnostic) == :numerical_diagnostic
+    @test_throws ArgumentError validate_relaxation_label(:result_scope, :strict_certificate)
+    @test_throws ArgumentError validate_relaxation_label(:unknown, :heuristic_basis)
 end
 
 @testset "Phase 0 canonical Pauli algebra and UInt16 boundary" begin

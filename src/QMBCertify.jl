@@ -17,6 +17,7 @@ export certify_qmb, certify_qmb_corr, dmrg_heisenberg_rat
 export GSB, PFB, slabel, reduce!, mosek_para
 export AbstractSymmetryModel, PauliSymmetryModel, heisenberg_symmetry, ising_chain_symmetry
 export symmetry_reduce_support
+export RELAXATION_TERMINOLOGY, validate_relaxation_label
 export PauliTerm, PauliPolynomial, pauli_product
 export TranslationOrbitMetadata, BasisSector, SymmetryDeclaration, RDMRegion
 export RelaxationSpecification, AffineMomentEntry, CompiledPSDBlock
