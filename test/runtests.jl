@@ -478,6 +478,33 @@ end
     @test_throws ArgumentError cluster_chain_hamiltonian(1.0, Inf, 0.0, L)
 end
 
+@testset "Phase 3.2 fixed-budget cluster basis and observables" begin
+    L = 6
+    budget = 25
+    uniform = cluster_chain_basis(:uniform_local, L; budget=budget)
+    adapted = cluster_chain_basis(:operator_adapted, L; budget=budget)
+    label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+    stabilizer(site) = sort(UInt16[label(site - 1, 3), label(site, 1), label(site + 1, 3)])
+
+    @test length(uniform.words) == length(adapted.words) == budget
+    @test uniform.words[1] == adapted.words[1] == UInt16[]
+    @test all(stabilizer(site) in adapted.words for site in 1:L)
+    @test all(UInt16[label(site, axis)] in adapted.words for axis in (1, 3), site in 1:L)
+    @test all(begin
+        word, phase = pauli_product(vcat(stabilizer(site), stabilizer(site + 1)))
+        phase == 1 && word in adapted.words
+    end for site in 1:L)
+
+    observables = cluster_chain_observables(1.0, 0.3, 0.0, L)
+    @test Set(keys(observables)) == Set((:energy_density, :cluster_stabilizer,
+        :x_magnetization, :z_magnetization, :cluster_string_2))
+    @test length(observables[:cluster_stabilizer].terms) == L
+    @test length(observables[:cluster_string_2].terms) == L
+    @test all(term -> term.word in adapted.words, observables[:cluster_string_2].terms)
+    @test_throws ArgumentError cluster_chain_basis(:unknown, L; budget=budget)
+    @test_throws ArgumentError cluster_chain_basis(:operator_adapted, L; budget=10_000)
+end
+
 @testset "license-aware solver regressions" begin
     if !mosek_license_available()
         @test_skip "Mosek license unavailable: solver-dependent Ising and GSB regressions skipped"

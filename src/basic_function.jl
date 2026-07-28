@@ -1486,6 +1486,75 @@ function cluster_chain_hamiltonian(J::Real, hx::Real, hz::Real, L::Int)
     return PauliPolynomial(terms)
 end
 
+"""Build fixed-budget uniform-local or cluster-operator-adapted basis words."""
+function cluster_chain_basis(policy::Symbol, L::Int; budget::Int=1 + 4L)
+    L >= 4 || throw(ArgumentError("periodic cluster chain basis requires L >= 4"))
+    budget > 0 || throw(ArgumentError("basis budget must be positive"))
+    label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+    stabilizer(site) = UInt16[label(site - 1, 3), label(site, 1), label(site + 1, 3)]
+    words = Vector{UInt16}[]
+    seen = Set{Vector{UInt16}}()
+    _push_unique_word!(words, seen, UInt16[])
+    if policy == :uniform_local
+        width = 1
+        while length(words) < budget && width <= L
+            for start in 1:L, axes in Iterators.product(ntuple(_ -> 1:3, width)...)
+                _push_unique_word!(words, seen,
+                    UInt16[label(start + offset - 1, axes[offset]) for offset in 1:width])
+                length(words) == budget && break
+            end
+            width += 1
+        end
+    elseif policy == :operator_adapted
+        seed_families = (
+            (stabilizer(site) for site in 1:L),
+            (UInt16[label(site, axis)] for axis in (1, 3) for site in 1:L),
+            (vcat(stabilizer(site), stabilizer(site + 1)) for site in 1:L),
+            (UInt16[label(site, 3), label(site + 1, 3)] for site in 1:L),
+            (UInt16[label(site, 3), label(site + 1, 1), label(site + 2, 3)]
+             for site in 1:L),
+        )
+        for family in seed_families
+            for word in family
+                _push_unique_word!(words, seen, word)
+                length(words) == budget && break
+            end
+            length(words) == budget && break
+        end
+    else
+        throw(ArgumentError("unknown cluster-chain basis policy $policy"))
+    end
+    length(words) == budget || throw(ArgumentError(
+        "cluster basis policy $policy generated only $(length(words)) words for budget $budget"))
+    return BasisSector(Symbol(:cluster_, policy), words)
+end
+
+"""Construct extensive cluster, field, and finite-string observables."""
+function cluster_chain_observables(J::Real, hx::Real, hz::Real, L::Int)
+    hamiltonian = cluster_chain_hamiltonian(J, hx, hz, L)
+    label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+    stabilizer(site) = UInt16[label(site - 1, 3), label(site, 1), label(site + 1, 3)]
+    cluster_terms = Pair{Vector{UInt16},Float64}[]
+    x_terms = Pair{Vector{UInt16},Float64}[]
+    z_terms = Pair{Vector{UInt16},Float64}[]
+    string_terms = Pair{Vector{UInt16},Float64}[]
+    for site in 1:L
+        push!(cluster_terms, stabilizer(site) => 1.0)
+        push!(x_terms, UInt16[label(site, 1)] => 1.0)
+        push!(z_terms, UInt16[label(site, 3)] => 1.0)
+        string_word, phase = pauli_product(vcat(stabilizer(site), stabilizer(site + 1)))
+        phase == 1 || error("adjacent cluster stabilizers must have Hermitian product")
+        push!(string_terms, string_word => 1.0)
+    end
+    return Dict{Symbol,PauliPolynomial}(
+        :energy_density => hamiltonian,
+        :cluster_stabilizer => PauliPolynomial(cluster_terms),
+        :x_magnetization => PauliPolynomial(x_terms),
+        :z_magnetization => PauliPolynomial(z_terms),
+        :cluster_string_2 => PauliPolynomial(string_terms),
+    )
+end
+
 """Construct the paper's explicit 1D sparse basis and Table 2 structural counts."""
 function heisenberg_table2_benchmark(N::Int=100, d::Int=4, r::Int=1)
     N > 0 && 0 <= d <= N || throw(ArgumentError("invalid Table 2 parameters"))
