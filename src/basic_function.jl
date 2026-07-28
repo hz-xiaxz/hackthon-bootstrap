@@ -1184,6 +1184,28 @@ function solve_relaxation(built::BuiltRelaxationModel)
                                  scope, built.compiled.diagnostics.fingerprint)
 end
 
+"""
+Construct the periodic explicitly dimerized J1-J2 Heisenberg Hamiltonian.
+Odd bonds have coupling `J1*(1-delta)` and even bonds `J1*(1+delta)`.
+Every X, Y, and Z Pauli product is expanded explicitly with spin factor 1/4.
+"""
+function dimerized_j1j2_hamiltonian(J1::Real, J2::Real, delta::Real, L::Int)
+    L >= 4 && iseven(L) || throw(ArgumentError("dimerized periodic chain length must be even and at least 4"))
+    all(isfinite, (J1, J2, delta)) || throw(ArgumentError("dimerized-chain parameters must be finite"))
+    terms = Pair{Vector{UInt16},Float64}[]
+    for site in 1:L
+        nearest = mod1(site + 1, L)
+        next_nearest = mod1(site + 2, L)
+        nearest_coupling = Float64(J1 * (1 + (-1)^site * delta) / 4)
+        next_nearest_coupling = Float64(J2 / 4)
+        for axis in 1:3
+            push!(terms, UInt16[3 * (site - 1) + axis, 3 * (nearest - 1) + axis] => nearest_coupling)
+            push!(terms, UInt16[3 * (site - 1) + axis, 3 * (next_nearest - 1) + axis] => next_nearest_coupling)
+        end
+    end
+    return PauliPolynomial(terms)
+end
+
 """Construct the paper's explicit 1D sparse basis and Table 2 structural counts."""
 function heisenberg_table2_benchmark(N::Int=100, d::Int=4, r::Int=1)
     N > 0 && 0 <= d <= N || throw(ArgumentError("invalid Table 2 parameters"))

@@ -268,6 +268,29 @@ function mosek_license_available()
     return any(isfile, license_paths)
 end
 
+@testset "Phase 2.1 explicit dimerized J1-J2 Hamiltonian" begin
+    L = 6
+    mg = dimerized_j1j2_hamiltonian(1.0, 0.5, 0.0, L)
+    mg_terms = Dict(term.word => real(term.coefficient) for term in mg.terms)
+    @test length(mg.terms) == 6L
+    @test mg_terms[UInt16[1, 4]] == 0.25
+    @test mg_terms[UInt16[1, 7]] == 0.125
+    @test all(axis -> haskey(mg_terms, UInt16[axis, 3 + axis]), 1:3)
+
+    decoupled = dimerized_j1j2_hamiltonian(1.0, 0.0, 1.0, L)
+    decoupled_terms = Dict(term.word => real(term.coefficient) for term in decoupled.terms)
+    pauli_label(site, axis) = UInt16(3 * (site - 1) + axis)
+    @test length(decoupled.terms) == 3L ÷ 2
+    @test all(decoupled_terms[sort(UInt16[pauli_label(site, axis),
+                                                   pauli_label(mod1(site + 1, L), axis)])] == 0.5
+              for site in 2:2:L, axis in 1:3)
+    @test all(!haskey(decoupled_terms, sort(UInt16[pauli_label(site, axis),
+                                                        pauli_label(mod1(site + 1, L), axis)]))
+              for site in 1:2:(L - 1), axis in 1:3)
+    @test_throws ArgumentError dimerized_j1j2_hamiltonian(1.0, 0.5, 0.0, 5)
+    @test_throws ArgumentError dimerized_j1j2_hamiltonian(Inf, 0.5, 0.0, L)
+end
+
 @testset "license-aware solver regressions" begin
     if !mosek_license_available()
         @test_skip "Mosek license unavailable: solver-dependent Ising and GSB regressions skipped"

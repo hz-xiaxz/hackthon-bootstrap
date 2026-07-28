@@ -165,7 +165,7 @@ Table 2 中的 **31** 是 **`N=100, d=4, r=1` 在利用论文全部所列结构�
 
 ### Phase 2 — MG and Explicitly Dimerized Chain
 
-- [ ] **2.1 [Not Started] 建立模型显式 Hamiltonian。** 修改位置：优先 `examples/ground_state.jl` 的具名构造与测试 helper；只有成为公共 API 才新增模型专属源码。采用 Pauli 约定
+- [x] **2.1 [Done] 建立模型显式 Hamiltonian。** 修改位置：优先 `examples/ground_state.jl` 的具名构造与测试 helper；只有成为公共 API 才新增模型专属源码。采用 Pauli 约定
   \[
   H=\tfrac14\sum_i J_1[1+(-1)^i\delta](X_iX_{i+1}+Y_iY_{i+1}+Z_iZ_{i+1})+\tfrac{J_2}{4}\sum_i(X_iX_{i+2}+Y_iY_{i+2}+Z_iZ_{i+2}).
   \]
