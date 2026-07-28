@@ -1601,6 +1601,96 @@ function cluster_chain_specification(J::Real, hx::Real, hz::Real, L::Int;
         normalization=L)
 end
 
+"""Compute finite-chain ED energy and ground-space observable intervals."""
+function cluster_chain_exact_benchmark(J::Real, hx::Real, hz::Real, L::Int)
+    L <= 12 || throw(ArgumentError("exact cluster benchmark is limited to L <= 12"))
+    observables = cluster_chain_observables(J, hx, hz, L)
+    dimension = 1 << L
+    function dense_matrix(polynomial)
+        matrix = zeros(ComplexF64, dimension, dimension)
+        for term in polynomial.terms
+            local_matrix = ComplexF64[1]
+            axes = Dict(cld(Int(label), 3) => Int(mod1(label, 3)) for label in term.word)
+            for site in 1:L
+                local_matrix = kron(local_matrix, _pauli_matrix(get(axes, site, 0)))
+            end
+            matrix .+= term.coefficient .* local_matrix
+        end
+        return Hermitian(matrix)
+    end
+    eigensystem = eigen(dense_matrix(observables[:energy_density]))
+    ground_energy = real(first(eigensystem.values))
+    ground_indices = findall(value -> isapprox(value, ground_energy; atol=1e-9, rtol=1e-9),
+                             eigensystem.values)
+    ground_space = eigensystem.vectors[:, ground_indices]
+    intervals = Dict{Symbol,Tuple{Float64,Float64}}()
+    for name in (:cluster_stabilizer, :x_magnetization, :z_magnetization, :cluster_string_2)
+        restricted = Hermitian(ground_space' * Matrix(dense_matrix(observables[name])) *
+                               ground_space / L)
+        values = eigvals(restricted)
+        intervals[name] = (real(first(values)), real(last(values)))
+    end
+    return (energy_density=ground_energy / L,
+            ground_space_dimension=length(ground_indices),
+            observable_intervals=intervals)
+end
+
+"""Compile and optionally solve the fixed-budget cluster field scan."""
+function cluster_chain_scan(; L::Int=6, budget::Int=25, optimizer=nothing,
+        optimizer_attributes=Pair[], anchor_tolerance::Real=1e-5,
+        improvement_tolerance::Real=1e-5)
+    points = (0.0, 0.2, 0.4, 0.6)
+    rows = NamedTuple[]
+    for hx in points
+        reference = cluster_chain_exact_benchmark(1.0, hx, 0.0, L)
+        for policy in (:uniform_local, :operator_adapted)
+            compiled = compile_relaxation(cluster_chain_specification(
+                1.0, hx, 0.0, L; policy=policy, budget=budget,
+                strengthening=:baseline))
+            value = status = nothing
+            if optimizer !== nothing
+                built = build_jump_model(compiled; optimizer=optimizer,
+                    optimizer_attributes=optimizer_attributes)
+                set_optimizer_attribute(built.model, MOI.Silent(), true)
+                solved = solve_relaxation(built)
+                value = solved.objective_value
+                status = solved.status
+            end
+            push!(rows, (hx=hx, policy=policy,
+                max_psd_block_dimension=compiled.diagnostics.max_psd_block_dimension,
+                scalar_moment_count=compiled.diagnostics.scalar_moment_count,
+                fingerprint=compiled.diagnostics.fingerprint,
+                constraint_provenance=copy(compiled.diagnostics.constraint_provenance),
+                exact_energy_density=reference.energy_density,
+                relaxation_value=value,
+                reference_minus_value=value === nothing ? nothing : reference.energy_density - value,
+                status=status, observable_intervals=reference.observable_intervals))
+        end
+    end
+    equal_max_block_budget = all(begin
+        pair = filter(row -> row.hx == hx, rows)
+        length(unique(getfield.(pair, :max_psd_block_dimension))) == 1
+    end for hx in points)
+    if optimizer === nothing
+        return (rows=rows, equal_max_block_budget=equal_max_block_budget,
+                decision=:not_evaluated, reasons=String[])
+    end
+    anchor_rows = filter(row -> row.hx == 0.0, rows)
+    anchor_closed = all(row -> abs(row.reference_minus_value) <= anchor_tolerance, anchor_rows)
+    adapted_improved = any(begin
+        uniform = only(filter(row -> row.hx == adapted.hx &&
+                                    row.policy == :uniform_local, rows))
+        adapted.reference_minus_value < uniform.reference_minus_value - improvement_tolerance
+    end for adapted in rows if adapted.hx != 0.0 && adapted.policy == :operator_adapted)
+    reasons = String[]
+    equal_max_block_budget || push!(reasons, "fixed max-PSD-block budget mismatch")
+    anchor_closed || push!(reasons, "commuting cluster anchor did not close")
+    adapted_improved || push!(reasons,
+        "adapted basis did not improve any nonzero-field scan point after seed ablation")
+    return (rows=rows, equal_max_block_budget=equal_max_block_budget,
+            decision=isempty(reasons) ? :pass : :stop, reasons=reasons)
+end
+
 """Construct the paper's explicit 1D sparse basis and Table 2 structural counts."""
 function heisenberg_table2_benchmark(N::Int=100, d::Int=4, r::Int=1)
     N > 0 && 0 <= d <= N || throw(ArgumentError("invalid Table 2 parameters"))

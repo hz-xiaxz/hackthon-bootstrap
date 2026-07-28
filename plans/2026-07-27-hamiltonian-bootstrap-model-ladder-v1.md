@@ -1,6 +1,6 @@
 # Hamiltonian Bootstrap Model Ladder
 
-**文件状态：** Gate A Complete；Phase 2 Complete（已通过恢复 gate；Phase 3 尚未执行）
+**文件状态：** Gate A Complete；Phase 2 Complete；Phase 3 Stopped at 3.4（未进入 Phase 4）
 **计划日期：** 2026-07-27  
 **目标仓库：** `/home/hzxiaxz/Quantum-harness/Hamiltonian-Bootstrap`  
 **实施路线（固定顺序）：** MG/显式二聚化 chain → cluster model 加场 → toric code 加场 → Kitaev honeycomb → Shastry–Sutherland → triangular J1-J2
@@ -192,9 +192,9 @@ Table 2 中的 **31** 是 **`N=100, d=4, r=1` 在利用论文全部所列结构�
   首轮固定 `h_z=0`，另以 `h_z` 作为显式 symmetry-breaking stress test。理由：验证三体 Hamiltonian、场项和非 Heisenberg symmetry。
 - [x] **3.2 [Done] 声明 basis/observables。** baseline 为连续局域 strings；adapted seeds 包含 cluster stabilizers `Z-X-Z`、相邻 stabilizer products、field operators、稳定子端点 string fragments。observables 为能量、`<Z_{i-1}X_iZ_{i+1}>`、`<X_i>`、`<Z_i>` 与相邻稳定子乘积定义的有限长度 cluster string order；目标 string 的端点和路径显式进入 adapted basis。
 - [x] **3.3 [Done] 声明 symmetry/strengthening。** 未复用 Heisenberg 轴置换；显式声明一格平移、site reflection，以及仅在 `h_z=0` 时成立的 global π-X generator。`h_z≠0` 自动移除该 generator，强行声明会被 invariance check 拒绝。baseline PSD、linear commutator 与 4×4 PSD state-optimality basis 逐层启用并记录 block diagnostics。
-- [ ] **3.4 [Not Started] Benchmark 与停止规则。** `h_x=h_z=0` commuting stabilizer 点必须达到精确能量并固定 stabilizer expectation；小系统用 exact diagonalization 对照 field sweep。若三体项 closure、string observable support 或 symmetry-breaking `h_z` 的 generator rejection 任一失败，停止；若 adapted basis 在固定 budget 下不能延长 stabilizer/string interval 的有效区间，先完成 basis ablation 后再决定是否进入 toric。
+- [!] **3.4 [Stopped after ablation] Benchmark 与停止规则。** `h_x=h_z=0` commuting stabilizer 点通过 ED 与两套 fixed-budget SDP：能量密度为 `-1`，stabilizer 与相邻 stabilizer string expectation 均固定为 `1`。`L=6` 的 `h_x=0.2,0.4,0.6` ED 对照及 8 行扫描可重放，两套 basis 的最大 PSD block 都为 25；三体 closure、string observable support 和 `h_z≠0` generator rejection 均通过。但 operator-adapted basis 在三个非零横场点的能量 gap 均未优于 uniform-local；进一步测试 baseline/linear/PSD strengthening，并对 ZZ、XX、ZX 三组补充 seeds 做同预算 ablation 后仍无改善，故触发停止规则，不进入 toric。
 
-**Phase 3 完成定义：** commuting anchor、场扰动、小系统 ED、string observable 和 symmetry-breaking negative test 全部通过；这是通用 polynomial/compiler 的第二真实模型用点。此时才评估是否把共享编译代码从现有文件移入 `src/pauli_relaxation.jl`。
+**Phase 3 状态：Stopped。** commuting anchor、场扰动 ED、string observable、三体 closure 和 symmetry-breaking negative test 均通过，通用 polynomial/compiler 的第二真实模型用点成立；但 fixed-budget adapted basis 在 baseline、state-optimality strengthening 与三组 seed ablation 后仍未改善任何非零横场点，故 Phase 3 完成定义未满足，Phase 4 保持未执行。
 
 ### Phase 4 — Toric Code with Field
 

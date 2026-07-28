@@ -536,6 +536,38 @@ end
         policy=:operator_adapted, budget=25, strengthening=:unknown)
 end
 
+@testset "Phase 3.4 cluster ED benchmark and fixed-budget gate" begin
+    L = 6
+    anchor = cluster_chain_exact_benchmark(1.0, 0.0, 0.0, L)
+    @test anchor.energy_density ≈ -1.0 atol=1e-10
+    @test anchor.ground_space_dimension == 1
+    @test anchor.observable_intervals[:cluster_stabilizer][1] ≈ 1.0 atol=1e-10
+    @test anchor.observable_intervals[:cluster_stabilizer][2] ≈ 1.0 atol=1e-10
+    @test anchor.observable_intervals[:cluster_string_2][1] ≈ 1.0 atol=1e-10
+    @test anchor.observable_intervals[:cluster_string_2][2] ≈ 1.0 atol=1e-10
+    @test all(value -> isapprox(value, 0; atol=1e-10),
+              anchor.observable_intervals[:x_magnetization])
+    @test all(value -> isapprox(value, 0; atol=1e-10),
+              anchor.observable_intervals[:z_magnetization])
+
+    field = cluster_chain_exact_benchmark(1.0, 0.4, 0.0, L)
+    @test field.energy_density < anchor.energy_density
+    @test field.observable_intervals[:cluster_stabilizer][1] < 1.0
+    @test_throws ArgumentError cluster_chain_exact_benchmark(1.0, 0.0, 0.0, 14)
+
+    report = cluster_chain_scan(L=L, budget=25)
+    @test length(report.rows) == 8
+    @test report.equal_max_block_budget
+    @test report.decision == :not_evaluated
+    @test all(row -> row.max_psd_block_dimension == 25, report.rows)
+    @test all(row -> row.scalar_moment_count > 0 && !isempty(row.fingerprint), report.rows)
+    @test all(row -> !isempty(row.constraint_provenance), report.rows)
+    @test all(row -> row.relaxation_value === nothing &&
+                     row.reference_minus_value === nothing && row.status === nothing, report.rows)
+    repeated = cluster_chain_scan(L=L, budget=25)
+    @test getfield.(report.rows, :fingerprint) == getfield.(repeated.rows, :fingerprint)
+end
+
 @testset "license-aware solver regressions" begin
     if !mosek_license_available()
         @test_skip "Mosek license unavailable: solver-dependent Ising and GSB regressions skipped"
@@ -561,6 +593,18 @@ end
                                          row.policy == :operator_adapted, rdm_scan.rows))
             adapted.gap < uniform.gap - 1e-5
         end for delta in (0.9, 0.8))
+
+        cluster_scan = cluster_chain_scan(L=6, budget=25;
+            optimizer=QMBCertify.Mosek.Optimizer)
+        @test cluster_scan.decision == :stop
+        @test cluster_scan.equal_max_block_budget
+        @test cluster_scan.reasons == [
+            "adapted basis did not improve any nonzero-field scan point after seed ablation"]
+        @test all(row -> string(row.status) == "OPTIMAL", cluster_scan.rows)
+        @test all(row -> isfinite(row.relaxation_value) &&
+                         row.reference_minus_value >= -2e-6, cluster_scan.rows)
+        @test all(row -> abs(row.reference_minus_value) <= 1e-5,
+                  filter(row -> row.hx == 0.0, cluster_scan.rows))
 
         L = 4
         h = 1.7
