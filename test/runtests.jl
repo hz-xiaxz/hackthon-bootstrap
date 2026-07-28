@@ -419,6 +419,10 @@ end
     @test all(row -> !isempty(row.fingerprint), report.rows)
     repeated = dimerized_chain_scan(L=6, budget=25)
     @test getfield.(report.rows, :fingerprint) == getfield.(repeated.rows, :fingerprint)
+    rdm_report = dimerized_chain_scan(L=6, budget=25, rdm_level=:three_site)
+    @test all(row -> row.max_psd_block_dimension == 25, rdm_report.rows)
+    @test all(row -> row.scalar_moment_count in (7, 9), rdm_report.rows)
+    @test getfield.(rdm_report.rows, :fingerprint) != getfield.(report.rows, :fingerprint)
     @test all(begin
         pair = filter(row -> row.path == path && row.J2 == J2 && row.delta == delta,
                       report.rows)
@@ -449,6 +453,14 @@ end
         @test "adapted basis did not improve any non-anchor scan point" in scan.reasons
         @test all(row -> string(row.status) == "OPTIMAL", scan.rows)
         @test all(row -> isfinite(row.lower_bound) && row.gap >= -2e-6, scan.rows)
+
+        rdm_scan = dimerized_chain_scan(L=6, budget=25; rdm_level=:three_site,
+            optimizer=QMBCertify.Mosek.Optimizer)
+        @test rdm_scan.decision == :stop
+        @test rdm_scan.reasons == ["adapted basis did not improve any non-anchor scan point"]
+        @test all(row -> abs(row.gap) <= 1e-5,
+                  filter(row -> (row.J2, row.delta) in ((0.5, 0.0), (0.0, 1.0)),
+                         rdm_scan.rows))
 
         L = 4
         h = 1.7

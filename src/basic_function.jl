@@ -1353,7 +1353,8 @@ Compile and optionally solve the fixed-budget Phase 2 scan.
 The returned decision mechanically applies the stage stop rules; it never advances stages.
 """
 function dimerized_chain_scan(; L::Int=6, budget::Int=25, optimizer=nothing,
-        optimizer_attributes=Pair[], anchor_tolerance::Real=1e-5)
+        optimizer_attributes=Pair[], anchor_tolerance::Real=1e-5,
+        rdm_level::Symbol=:none)
     points = [(path=:mg, J2=ratio, delta=0.0) for ratio in (0.4, 0.5, 0.6)]
     append!(points, [(path=:dimer, J2=0.0, delta=value) for value in (1.0, 0.9, 0.8)])
     rows = NamedTuple[]
@@ -1362,7 +1363,8 @@ function dimerized_chain_scan(; L::Int=6, budget::Int=25, optimizer=nothing,
         for policy in (:uniform_local, :operator_adapted)
             compiled = compile_relaxation(dimerized_chain_specification(
                 1.0, point.J2, point.delta, L;
-                policy=policy, budget=budget, strengthening=:baseline))
+                policy=policy, budget=budget, strengthening=:baseline,
+                rdm_level=rdm_level))
             bound = status = nothing
             if optimizer !== nothing
                 built = build_jump_model(compiled; optimizer=optimizer,
