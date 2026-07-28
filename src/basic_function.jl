@@ -1206,6 +1206,19 @@ function dimerized_j1j2_hamiltonian(J1::Real, J2::Real, delta::Real, L::Int)
     return PauliPolynomial(terms)
 end
 
+"""Return the total-spin-3/2 projector on three consecutive periodic sites."""
+function mg_three_site_projector(start::Int, L::Int)
+    L >= 4 && iseven(L) || throw(ArgumentError("MG periodic chain length must be even and at least 4"))
+    1 <= start <= L || throw(ArgumentError("projector start must lie in 1:L"))
+    sites = (start, mod1(start + 1, L), mod1(start + 2, L))
+    label(site, axis) = UInt16(3 * (site - 1) + axis)
+    terms = Pair{Vector{UInt16},Float64}[UInt16[] => 0.5]
+    for left in 1:2, right in (left + 1):3, axis in 1:3
+        push!(terms, UInt16[label(sites[left], axis), label(sites[right], axis)] => 1 / 6)
+    end
+    return PauliPolynomial(terms)
+end
+
 function _push_unique_word!(words, seen, word)
     canonical, phase = pauli_product(word)
     phase == 1 || throw(ArgumentError("basis seed $word is not Hermitian"))

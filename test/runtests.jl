@@ -1,5 +1,6 @@
 using Test
 using JuMP
+using LinearAlgebra
 using QMBCertify
 
 @testset "Phase 0 baseline and model-specific Pauli symmetry" begin
@@ -289,6 +290,29 @@ end
               for site in 1:2:(L - 1), axis in 1:3)
     @test_throws ArgumentError dimerized_j1j2_hamiltonian(1.0, 0.5, 0.0, 5)
     @test_throws ArgumentError dimerized_j1j2_hamiltonian(Inf, 0.5, 0.0, L)
+
+    projectors = [mg_three_site_projector(site, L) for site in 1:L]
+    projector_sum = Dict{Vector{UInt16},ComplexF64}()
+    for projector in projectors, term in projector.terms
+        projector_sum[term.word] = get(projector_sum, term.word, 0.0 + 0.0im) + 0.75term.coefficient
+    end
+    shifted_mg = Dict(term.word => term.coefficient for term in mg.terms)
+    shifted_mg[UInt16[]] = 3L / 8
+    @test projector_sum == shifted_mg
+    @test all(begin
+        matrix = Matrix(QMBCertify._pauli_matrix(0))
+        matrix = kron(matrix, matrix, matrix)
+        for term in projector.terms
+            axes = Dict(cld(Int(label), 3) => Int(mod1(label, 3)) for label in term.word)
+            local_matrix = QMBCertify._pauli_matrix(get(axes, 1, 0))
+            local_matrix = kron(local_matrix, QMBCertify._pauli_matrix(get(axes, 2, 0)))
+            local_matrix = kron(local_matrix, QMBCertify._pauli_matrix(get(axes, 3, 0)))
+            matrix += term.coefficient * local_matrix
+        end
+        values = eigvals(Hermitian(matrix - Matrix{ComplexF64}(I, 8, 8)))
+        all(value -> isapprox(value, 0; atol=1e-12) || isapprox(value, 1; atol=1e-12), values)
+    end for projector in projectors[1:1])
+    @test_throws ArgumentError mg_three_site_projector(0, L)
 end
 
 @testset "Phase 2.2 fixed-budget uniform and dimer-adapted bases" begin
