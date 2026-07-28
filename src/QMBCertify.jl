@@ -23,7 +23,7 @@ export TranslationOrbitMetadata, BasisSector, SymmetryDeclaration, RDMRegion
 export RelaxationSpecification, AffineMomentEntry, CompiledPSDBlock
 export CompilationDiagnostics, CompiledRelaxation, BuiltRelaxationModel, RelaxationSolveResult
 export compile_relaxation, build_jump_model, solve_relaxation, heisenberg_table2_benchmark
-export dimerized_j1j2_hamiltonian
+export dimerized_j1j2_hamiltonian, dimerized_chain_basis
 export IsingMomentResult, ising_relaxation_specification, compile_ising_relaxation
 export ising_ground_state_bound
 

@@ -1206,6 +1206,64 @@ function dimerized_j1j2_hamiltonian(J1::Real, J2::Real, delta::Real, L::Int)
     return PauliPolynomial(terms)
 end
 
+function _push_unique_word!(words, seen, word)
+    canonical, phase = pauli_product(word)
+    phase == 1 || throw(ArgumentError("basis seed $word is not Hermitian"))
+    canonical in seen && return false
+    push!(seen, canonical)
+    push!(words, canonical)
+    return true
+end
+
+"""
+Build an explicit fixed-budget basis policy for the dimerized chain.
+`:uniform_local` enumerates all contiguous Pauli strings by length.
+`:operator_adapted` prioritizes strong/weak dimers, J2 pairs, and adjacent-dimer products.
+"""
+function dimerized_chain_basis(policy::Symbol, L::Int; budget::Int=1 + 12L)
+    L >= 4 && iseven(L) || throw(ArgumentError("dimerized periodic chain length must be even and at least 4"))
+    budget > 0 || throw(ArgumentError("basis budget must be positive"))
+    words = Vector{UInt16}[]
+    seen = Set{Vector{UInt16}}()
+    _push_unique_word!(words, seen, UInt16[])
+    label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+
+    if policy == :uniform_local
+        length_ = 1
+        while length(words) < budget && length_ <= L
+            for start in 1:L, axes in Iterators.product(ntuple(_ -> 1:3, length_)...)
+                _push_unique_word!(words, seen,
+                    UInt16[label(start + offset - 1, axes[offset]) for offset in 1:length_])
+                length(words) == budget && break
+            end
+            length_ += 1
+        end
+    elseif policy == :operator_adapted
+        seed_families = (
+            (UInt16[label(site, axis)] for site in 1:L for axis in 1:3),
+            (UInt16[label(site, axis), label(site + 1, axis)] for site in 2:2:L for axis in 1:3),
+            (UInt16[label(site, axis), label(site + 1, axis)] for site in 1:2:(L - 1) for axis in 1:3),
+            (UInt16[label(site, axis), label(site + 2, axis)] for site in 1:L for axis in 1:3),
+            (UInt16[label(site, axis), label(site + 1, axis),
+                    label(site + 2, axis), label(site + 3, axis)] for site in 2:2:L for axis in 1:3),
+            (UInt16[label(site, left_axis), label(site + 1, right_axis)]
+             for site in 2:2:L for left_axis in 1:3 for right_axis in 1:3 if left_axis != right_axis),
+        )
+        for family in seed_families
+            for word in family
+                _push_unique_word!(words, seen, word)
+                length(words) == budget && break
+            end
+            length(words) == budget && break
+        end
+    else
+        throw(ArgumentError("unknown dimerized-chain basis policy $policy"))
+    end
+    length(words) == budget || throw(ArgumentError(
+        "basis policy $policy generated only $(length(words)) distinct words for budget $budget"))
+    return BasisSector(Symbol(:dimerized_, policy), words)
+end
+
 """Construct the paper's explicit 1D sparse basis and Table 2 structural counts."""
 function heisenberg_table2_benchmark(N::Int=100, d::Int=4, r::Int=1)
     N > 0 && 0 <= d <= N || throw(ArgumentError("invalid Table 2 parameters"))

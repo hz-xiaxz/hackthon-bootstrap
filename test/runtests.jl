@@ -291,6 +291,25 @@ end
     @test_throws ArgumentError dimerized_j1j2_hamiltonian(Inf, 0.5, 0.0, L)
 end
 
+@testset "Phase 2.2 fixed-budget uniform and dimer-adapted bases" begin
+    L = 6
+    budget = 1 + 12L
+    uniform = dimerized_chain_basis(:uniform_local, L; budget=budget)
+    adapted = dimerized_chain_basis(:operator_adapted, L; budget=budget)
+    @test length(uniform.words) == length(adapted.words) == budget
+    @test uniform.words[1] == adapted.words[1] == UInt16[]
+    @test all(length(word) <= 2 for word in uniform.words)
+
+    strong_x = UInt16[4, 7]
+    weak_x = UInt16[1, 4]
+    j2_x = UInt16[1, 7]
+    adjacent_dimers_x = UInt16[4, 7, 10, 13]
+    @test all(word -> word in adapted.words, (strong_x, weak_x, j2_x, adjacent_dimers_x))
+    @test adjacent_dimers_x ∉ uniform.words
+    @test_throws ArgumentError dimerized_chain_basis(:unknown, L; budget=budget)
+    @test_throws ArgumentError dimerized_chain_basis(:operator_adapted, L; budget=10_000)
+end
+
 @testset "license-aware solver regressions" begin
     if !mosek_license_available()
         @test_skip "Mosek license unavailable: solver-dependent Ising and GSB regressions skipped"
