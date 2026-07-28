@@ -1439,19 +1439,31 @@ function _dimerized_strengthening(level::Symbol, L::Int)
     return linear_tests, psd_state_basis
 end
 
+function _dimerized_rdm_regions(level::Symbol, delta::Real, L::Int)
+    level in (:none, :three_site, :four_site) || throw(ArgumentError("unknown RDM level $level"))
+    level == :none && return RDMRegion[]
+    width = level == :three_site ? 3 : 4
+    starts = iszero(delta) ? (1:1) : (1:2)
+    return [RDMRegion(Symbol(:contiguous_, width, :_start_, start),
+                      [mod1(start + offset, L) for offset in 0:(width - 1)])
+            for start in starts]
+end
+
 """Build a parameter-matched dimerized-chain relaxation specification."""
 function dimerized_chain_specification(J1::Real, J2::Real, delta::Real, L::Int;
         policy::Symbol=:uniform_local, budget::Int=1 + 12L,
-        strengthening::Symbol=:baseline, observables=nothing)
+        strengthening::Symbol=:baseline, rdm_level::Symbol=:none, observables=nothing)
     hamiltonian = dimerized_j1j2_hamiltonian(J1, J2, delta, L)
     basis = dimerized_chain_basis(policy, L; budget=budget)
     linear_tests, psd_state_basis = _dimerized_strengthening(strengthening, L)
+    rdm_regions = _dimerized_rdm_regions(rdm_level, delta, L)
     observable_polynomials = observables === nothing ?
         dimerized_chain_observables(J1, J2, delta, L) : observables
     return RelaxationSpecification(hamiltonian, [basis];
         symmetries=dimerized_chain_symmetries(delta, L),
         linear_tests=linear_tests,
         psd_state_basis=psd_state_basis,
+        rdm_regions=rdm_regions,
         observables=observable_polynomials,
         normalization=L)
 end

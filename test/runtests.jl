@@ -355,6 +355,18 @@ end
     @test baseline.normalization == L
     @test compile_relaxation(psd).diagnostics.psd_block_count == 2
 
+    three_site = dimerized_chain_specification(1.0, 0.5, 0.0, L;
+        policy=:uniform_local, budget=25, rdm_level=:three_site)
+    @test length(three_site.rdm_regions) == 1
+    @test three_site.rdm_regions[1].sites == [1, 2, 3]
+    @test compile_relaxation(three_site).diagnostics.psd_block_dimensions == [25, 8]
+    period_two = dimerized_chain_specification(1.0, 0.0, 0.4, L;
+        policy=:uniform_local, budget=25, rdm_level=:three_site)
+    @test getfield.(period_two.rdm_regions, :sites) == [[1, 2, 3], [2, 3, 4]]
+    four_site = dimerized_chain_specification(1.0, 0.5, 0.0, L;
+        policy=:uniform_local, budget=25, rdm_level=:four_site)
+    @test compile_relaxation(four_site).diagnostics.psd_block_dimensions == [25, 16]
+
     wrong_translation = SymmetryDeclaration(:wrong_translation, :moment_equality,
         [2, 3, 4, 5, 6, 1])
     dimerized_hamiltonian = dimerized_j1j2_hamiltonian(1.0, 0.0, 0.4, L)
@@ -363,6 +375,8 @@ end
         symmetries=[wrong_translation])
     @test_throws ArgumentError dimerized_chain_specification(1.0, 0.0, 0.4, L;
         policy=:uniform_local, budget=25, strengthening=:unknown)
+    @test_throws ArgumentError dimerized_chain_specification(1.0, 0.0, 0.4, L;
+        policy=:uniform_local, budget=25, rdm_level=:unknown)
 end
 
 @testset "Phase 2.4 MG and decoupled-dimer observables" begin
