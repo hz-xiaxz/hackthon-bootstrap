@@ -1472,6 +1472,20 @@ function dimerized_chain_specification(J1::Real, J2::Real, delta::Real, L::Int;
         normalization=L)
 end
 
+"""Construct the periodic cluster-chain Hamiltonian with transverse and longitudinal fields."""
+function cluster_chain_hamiltonian(J::Real, hx::Real, hz::Real, L::Int)
+    L >= 3 || throw(ArgumentError("periodic cluster chain length must be at least 3"))
+    all(isfinite, (J, hx, hz)) || throw(ArgumentError("cluster-chain parameters must be finite"))
+    label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+    terms = Pair{Vector{UInt16},Float64}[]
+    for site in 1:L
+        push!(terms, UInt16[label(site - 1, 3), label(site, 1), label(site + 1, 3)] => -Float64(J))
+        push!(terms, UInt16[label(site, 1)] => -Float64(hx))
+        push!(terms, UInt16[label(site, 3)] => -Float64(hz))
+    end
+    return PauliPolynomial(terms)
+end
+
 """Construct the paper's explicit 1D sparse basis and Table 2 structural counts."""
 function heisenberg_table2_benchmark(N::Int=100, d::Int=4, r::Int=1)
     N > 0 && 0 <= d <= N || throw(ArgumentError("invalid Table 2 parameters"))

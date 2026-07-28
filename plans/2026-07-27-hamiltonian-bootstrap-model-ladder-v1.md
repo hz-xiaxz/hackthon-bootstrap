@@ -185,7 +185,7 @@ Table 2 中的 **31** 是 **`N=100, d=4, r=1` 在利用论文全部所列结构�
 
 ### Phase 3 — Cluster Model with Field
 
-- [ ] **3.1 [Not Started] 建立显式 cluster Hamiltonian。** 预期模型专属位置：先在 example/test helper；若公共使用，新增 `src/cluster_chain.jl` 并更新 `src/QMBCertify.jl:35-43`。采用明确约定
+- [x] **3.1 [Done] 建立显式 cluster Hamiltonian。** 公共构造器采用明确约定
   \[
   H=-J\sum_i Z_{i-1}X_iZ_{i+1}-h_x\sum_iX_i-h_z\sum_iZ_i,
   \]

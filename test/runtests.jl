@@ -458,6 +458,26 @@ end
                                   (:dimer, 0.0, 0.9), (:dimer, 0.0, 0.8)))
 end
 
+@testset "Phase 3.1 explicit cluster-chain Hamiltonian" begin
+    L = 5
+    hamiltonian = cluster_chain_hamiltonian(1.25, 0.4, -0.2, L)
+    coefficient(word) = only(term.coefficient for term in hamiltonian.terms if term.word == word)
+    label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+
+    @test length(hamiltonian.terms) == 3L
+    @test coefficient(sort(UInt16[label(L, 3), label(1, 1), label(2, 3)])) == -1.25
+    @test coefficient(UInt16[label(3, 1)]) == -0.4
+    @test coefficient(UInt16[label(3, 3)]) == 0.2
+    @test all(term -> isreal(term.coefficient), hamiltonian.terms)
+
+    stabilizers_only = cluster_chain_hamiltonian(1.0, 0.0, 0.0, L)
+    @test length(stabilizers_only.terms) == L
+    @test all(term -> length(term.word) == 3 && term.coefficient == -1.0,
+              stabilizers_only.terms)
+    @test_throws ArgumentError cluster_chain_hamiltonian(1.0, 0.0, 0.0, 2)
+    @test_throws ArgumentError cluster_chain_hamiltonian(1.0, Inf, 0.0, L)
+end
+
 @testset "license-aware solver regressions" begin
     if !mosek_license_available()
         @test_skip "Mosek license unavailable: solver-dependent Ising and GSB regressions skipped"
