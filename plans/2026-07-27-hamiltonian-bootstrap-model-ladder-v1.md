@@ -175,6 +175,12 @@ Table 2 中的 **31** 是 **`N=100, d=4, r=1` 在利用论文全部所列结构�
 - [x] **2.4 [Done] 增加 observables 与 benchmark。** observables 至少含能量密度、强/弱 bond energy、dimer order、`C(1)=<X_iX_{i+1}>/4`、`C(2)=<X_iX_{i+2}>/4`。MG benchmark：`e0=-3/8`；`C(1)` interval 覆盖 `-1/8`，`C(2)` interval 覆盖 0。论文基准与 interval 位于 `MinerU_markdown_2604.01555v1_2081746923717435392.md:645-699`。
 - [!] **2.5 [Stopped] 已执行扰动扫描并触发停止规则。** 从 `(δ=0,J2/J1=0.5)` 沿 `J2/J1=0.4,0.5,0.6` 扫描，并从 `(δ=1,J2=0)` 沿 `δ=1.0,0.9,0.8` 扫描；每点比较相同最大 PSD block（25）的 uniform-local 与 operator-adapted basis，记录 scalar moments、fingerprint、constraint provenance、ED reference、求解值与 gap。解耦 dimer anchor 在容差内闭合，但 MG anchor 未闭合，且 adapted basis 在所测非零扰动点未优于 baseline，因此按停止规则停在本 stage，不进入 cluster。
 
+  **已验证的 MG 恢复方法：连续三站点 RDM positivity。** 在保持主 moment PSD block 为 `25×25`、使用 baseline strengthening 的条件下，加入一个连续 region `[1,2,3]` 的 `8×8` RDM PSD block，`L=6` MG 点的能量密度由 `-0.494265818594254` 改进为 `-0.3749999983081448`，相对精确值 `-3/8` 的绝对误差为 `1.69×10^-9`，求解状态为 `OPTIMAL`。解析依据是 MG 点的 frustration-free 分解
+  \[
+  H+\frac{3L}{8}I=\frac34\sum_i P^{(3/2)}_{i,i+1,i+2}\succeq0,
+  \]
+  因而连续三站点 RDM 半正定足以推出严格下界 `e0≥-3/8`；精确 MG dimer state 给出匹配上界。后续恢复 Phase 2 时，先把该分解做成 Pauli 系数恒等式测试，再将三站点 RDM 作为显式可选 strengthening 固化，并重跑 fixed-budget 扰动扫描。不得直接加入精确 moments 或能量等式。只有 MG 误差 `<1e-7` 且 adapted basis 在至少一个非零扰动点优于 uniform baseline，才允许重新放行 Phase 2。
+
 **Phase 2 状态：Stopped。** 2.1–2.4 结构与精确对角化 benchmark 通过；2.5 的固定预算求解触发停止规则。扫描与 diagnostics 可重放，但 MG fixed-budget relaxation 未闭合，operator-adapted basis 也未改善非零扰动点，所以 Phase 2 完成定义未满足，Phase 3 保持未执行。
 
 ### Phase 3 — Cluster Model with Field
