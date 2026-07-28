@@ -1,6 +1,6 @@
 # Hamiltonian Bootstrap Model Ladder
 
-**文件状态：** Gate A Complete；Phase 2 Stopped at 2.5（未进入 Phase 3）
+**文件状态：** Gate A Complete；Phase 2 Complete（已通过恢复 gate；Phase 3 尚未执行）
 **计划日期：** 2026-07-27  
 **目标仓库：** `/home/hzxiaxz/Quantum-harness/Hamiltonian-Bootstrap`  
 **实施路线（固定顺序）：** MG/显式二聚化 chain → cluster model 加场 → toric code 加场 → Kitaev honeycomb → Shastry–Sutherland → triangular J1-J2
@@ -173,15 +173,15 @@ Table 2 中的 **31** 是 **`N=100, d=4, r=1` 在利用论文全部所列结构�
 - [x] **2.2 [Done] 声明两组 basis policy。** uniform-local 使用显式连续 Pauli strings（先从长度 1–2，再按 budget 加至 3–4）；operator-adapted 在相同 budget 下优先加入 strong-dimer singlet-channel 等价 Pauli words、相邻两个 dimer 的 products、J2 跨 dimer pairs 和目标 observable support。sectors 与 seeds 全部列出，不自动生成猜测。理由：直接检验“从 frustration-free/可解点扰动时 operator-adapted basis 是否更耐用”。
 - [x] **2.3 [Done] 声明 symmetry 和 strengthening。** `δ=0` 可显式使用一站点 translation；`δ≠0` 只允许两站点 translation；reflection、全局 sign 和轴 permutation 必须按参数点显式启用并验证 Hamiltonian invariance。linear tests 与 PSD basis 从小局域 dimer operators 显式列出，逐层启用。理由：防止当前 `translation::Bool` 把 period-2 问题错误商掉。
 - [x] **2.4 [Done] 增加 observables 与 benchmark。** observables 至少含能量密度、强/弱 bond energy、dimer order、`C(1)=<X_iX_{i+1}>/4`、`C(2)=<X_iX_{i+2}>/4`。MG benchmark：`e0=-3/8`；`C(1)` interval 覆盖 `-1/8`，`C(2)` interval 覆盖 0。论文基准与 interval 位于 `MinerU_markdown_2604.01555v1_2081746923717435392.md:645-699`。
-- [!] **2.5 [Stopped] 已执行扰动扫描并触发停止规则。** 从 `(δ=0,J2/J1=0.5)` 沿 `J2/J1=0.4,0.5,0.6` 扫描，并从 `(δ=1,J2=0)` 沿 `δ=1.0,0.9,0.8` 扫描；每点比较相同最大 PSD block（25）的 uniform-local 与 operator-adapted basis，记录 scalar moments、fingerprint、constraint provenance、ED reference、求解值与 gap。解耦 dimer anchor 在容差内闭合，但 MG anchor 未闭合，且 adapted basis 在所测非零扰动点未优于 baseline，因此按停止规则停在本 stage，不进入 cluster。
+- [x] **2.5 [Done after recovery] 完成固定预算扰动扫描。** 初始扫描从 `(δ=0,J2/J1=0.5)` 沿 `J2/J1=0.4,0.5,0.6`，并从 `(δ=1,J2=0)` 沿 `δ=1.0,0.9,0.8` 比较相同最大 PSD block（25）的 uniform-local 与 operator-adapted basis；初版因 MG anchor 未闭合且 adapted 未改善而正确触发停止。恢复工作保持 `25×25` 主 moment block，加入连续三站点 RDM positivity，并将 adapted seed 顺序平衡为先完整覆盖奇/偶最近邻 bonds 与 J2 pairs、再加入单站点和高阶 products。恢复后的 12 行扫描中两个 anchor 均在 `1e-5` 内闭合，且 adapted basis 在 `δ=0.9,0.8` 两个非 anchor 点均比 uniform baseline 的 gap 至少改善 `1e-5`，机械 gate 返回 `:pass`。每行继续记录 scalar moments、fingerprint、constraint provenance、ED reference、求解值与 gap。
 
-  **已验证的 MG 恢复方法：连续三站点 RDM positivity。** 在保持主 moment PSD block 为 `25×25`、使用 baseline strengthening 的条件下，加入一个连续 region `[1,2,3]` 的 `8×8` RDM PSD block，`L=6` MG 点的能量密度由 `-0.494265818594254` 改进为 `-0.3749999983081448`，相对精确值 `-3/8` 的绝对误差为 `1.69×10^-9`，求解状态为 `OPTIMAL`。解析依据是 MG 点的 frustration-free 分解
+  **MG 恢复方法：连续三站点 RDM positivity。** 在保持主 moment PSD block 为 `25×25`、使用 baseline state-optimality strengthening 的条件下，加入一个连续 region `[1,2,3]` 的 `8×8` RDM PSD block，`L=6` MG 点的能量密度由 `-0.494265818594254` 改进为 `-0.3749999983081448`，相对精确值 `-3/8` 的绝对误差为 `1.69×10^-9`，求解状态为 `OPTIMAL`。解析依据是 MG 点的 frustration-free 分解
   \[
   H+\frac{3L}{8}I=\frac34\sum_i P^{(3/2)}_{i,i+1,i+2}\succeq0,
   \]
-  因而连续三站点 RDM 半正定足以推出严格下界 `e0≥-3/8`；精确 MG dimer state 给出匹配上界。后续恢复 Phase 2 时，先把该分解做成 Pauli 系数恒等式测试，再将三站点 RDM 作为显式可选 strengthening 固化，并重跑 fixed-budget 扰动扫描。不得直接加入精确 moments 或能量等式。只有 MG 误差 `<1e-7` 且 adapted basis 在至少一个非零扰动点优于 uniform baseline，才允许重新放行 Phase 2。
+  因而连续三站点 RDM 半正定足以推出严格下界 `e0≥-3/8`；精确 MG dimer state 给出匹配上界。该分解已有独立 Pauli 系数恒等式测试；三站点 RDM 已固化为显式 `rdm_level=:three_site`，未加入精确 moments 或能量等式。恢复 gate 要求的 MG 误差 `<1e-7` 与至少一个非零扰动点 adapted 优于 uniform baseline 均已满足。旧 `GSB` 的 MG+`rdm=8` 交叉运行在求解前触发现有 `reduce4` 的 `UInt16(-2)` conversion error，因此不作为通过证据；Phase 2 的通过证据为 projector 恒等式、有限链 ED 和新编译路径 SDP 三者一致。
 
-**Phase 2 状态：Stopped。** 2.1–2.4 结构与精确对角化 benchmark 通过；2.5 的固定预算求解触发停止规则。扫描与 diagnostics 可重放，但 MG fixed-budget relaxation 未闭合，operator-adapted basis 也未改善非零扰动点，所以 Phase 2 完成定义未满足，Phase 3 保持未执行。
+**Phase 2 状态：Complete。** 2.1–2.4 的结构与精确对角化 benchmark 通过；2.5 初始停止后已通过三站点 RDM 与 balanced adapted basis 恢复。固定预算扫描可重放、两个 anchor 闭合、adapted basis 在 dimer 扰动点产生严格改善，Phase 2 完成定义已满足。Phase 3 尚未执行。
 
 ### Phase 3 — Cluster Model with Field
 
