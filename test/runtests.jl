@@ -330,6 +330,13 @@ end
     adjacent_dimers_x = UInt16[4, 7, 10, 13]
     @test all(word -> word in adapted.words, (strong_x, weak_x, j2_x, adjacent_dimers_x))
     @test adjacent_dimers_x ∉ uniform.words
+    balanced = dimerized_chain_basis(:operator_adapted, L; budget=25)
+    pauli_label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+    @test all(sort(UInt16[pauli_label(site, axis), pauli_label(site + 1, axis)]) in balanced.words
+              for site in 1:L, axis in 1:3)
+    @test all(sort(UInt16[pauli_label(site, axis), pauli_label(site + 2, axis)]) in balanced.words
+              for site in 1:2, axis in 1:3)
+    @test all(length(word) != 1 for word in balanced.words)
     @test_throws ArgumentError dimerized_chain_basis(:unknown, L; budget=budget)
     @test_throws ArgumentError dimerized_chain_basis(:operator_adapted, L; budget=10_000)
 end
@@ -421,7 +428,16 @@ end
     @test getfield.(report.rows, :fingerprint) == getfield.(repeated.rows, :fingerprint)
     rdm_report = dimerized_chain_scan(L=6, budget=25, rdm_level=:three_site)
     @test all(row -> row.max_psd_block_dimension == 25, rdm_report.rows)
-    @test all(row -> row.scalar_moment_count in (7, 9), rdm_report.rows)
+    @test all(row -> row.scalar_moment_count > 0, rdm_report.rows)
+    @test all(begin
+        pair = filter(row -> row.path == path && row.J2 == J2 && row.delta == delta,
+                      rdm_report.rows)
+        adapted = only(filter(row -> row.policy == :operator_adapted, pair))
+        uniform = only(filter(row -> row.policy == :uniform_local, pair))
+        adapted.scalar_moment_count >= uniform.scalar_moment_count
+    end for (path, J2, delta) in ((:mg, 0.4, 0.0), (:mg, 0.5, 0.0),
+                                  (:mg, 0.6, 0.0), (:dimer, 0.0, 1.0),
+                                  (:dimer, 0.0, 0.9), (:dimer, 0.0, 0.8)))
     @test getfield.(rdm_report.rows, :fingerprint) != getfield.(report.rows, :fingerprint)
     @test all(begin
         pair = filter(row -> row.path == path && row.J2 == J2 && row.delta == delta,
@@ -449,18 +465,24 @@ end
         scan = dimerized_chain_scan(L=6, budget=25; optimizer=QMBCertify.Mosek.Optimizer)
         @test scan.decision == :stop
         @test scan.equal_max_block_budget
-        @test "MG anchor did not close at the fixed budget" in scan.reasons
-        @test "adapted basis did not improve any non-anchor scan point" in scan.reasons
+        @test scan.reasons == ["MG anchor did not close at the fixed budget"]
         @test all(row -> string(row.status) == "OPTIMAL", scan.rows)
         @test all(row -> isfinite(row.lower_bound) && row.gap >= -2e-6, scan.rows)
 
         rdm_scan = dimerized_chain_scan(L=6, budget=25; rdm_level=:three_site,
             optimizer=QMBCertify.Mosek.Optimizer)
-        @test rdm_scan.decision == :stop
-        @test rdm_scan.reasons == ["adapted basis did not improve any non-anchor scan point"]
+        @test rdm_scan.decision == :pass
+        @test isempty(rdm_scan.reasons)
         @test all(row -> abs(row.gap) <= 1e-5,
                   filter(row -> (row.J2, row.delta) in ((0.5, 0.0), (0.0, 1.0)),
                          rdm_scan.rows))
+        @test all(begin
+            uniform = only(filter(row -> row.path == :dimer && row.delta == delta &&
+                                         row.policy == :uniform_local, rdm_scan.rows))
+            adapted = only(filter(row -> row.path == :dimer && row.delta == delta &&
+                                         row.policy == :operator_adapted, rdm_scan.rows))
+            adapted.gap < uniform.gap - 1e-5
+        end for delta in (0.9, 0.8))
 
         L = 4
         h = 1.7

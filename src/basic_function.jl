@@ -1253,14 +1253,16 @@ function dimerized_chain_basis(policy::Symbol, L::Int; budget::Int=1 + 12L)
         end
     elseif policy == :operator_adapted
         seed_families = (
-            (UInt16[label(site, axis)] for site in 1:L for axis in 1:3),
-            (UInt16[label(site, axis), label(site + 1, axis)] for site in 2:2:L for axis in 1:3),
-            (UInt16[label(site, axis), label(site + 1, axis)] for site in 1:2:(L - 1) for axis in 1:3),
+            # Balance both translated dimer coverings before spending budget on
+            # one-site words; this prevents a 25-word budget from truncating
+            # immediately after one arbitrarily designated strong covering.
+            (UInt16[label(site, axis), label(site + 1, axis)] for site in 1:L for axis in 1:3),
             (UInt16[label(site, axis), label(site + 2, axis)] for site in 1:L for axis in 1:3),
+            (UInt16[label(site, axis)] for site in 1:L for axis in 1:3),
             (UInt16[label(site, axis), label(site + 1, axis),
-                    label(site + 2, axis), label(site + 3, axis)] for site in 2:2:L for axis in 1:3),
+                    label(site + 2, axis), label(site + 3, axis)] for site in 1:L for axis in 1:3),
             (UInt16[label(site, left_axis), label(site + 1, right_axis)]
-             for site in 2:2:L for left_axis in 1:3 for right_axis in 1:3 if left_axis != right_axis),
+             for site in 1:L for left_axis in 1:3 for right_axis in 1:3 if left_axis != right_axis),
         )
         for family in seed_families
             for word in family
