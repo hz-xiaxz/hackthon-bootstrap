@@ -1264,6 +1264,77 @@ function dimerized_chain_basis(policy::Symbol, L::Int; budget::Int=1 + 12L)
     return BasisSector(Symbol(:dimerized_, policy), words)
 end
 
+"""
+Construct extensive observable polynomials for the dimerized chain.
+With specification normalization `L`, they evaluate to densities or translation averages.
+"""
+function dimerized_chain_observables(J1::Real, J2::Real, delta::Real, L::Int)
+    hamiltonian = dimerized_j1j2_hamiltonian(J1, J2, delta, L)
+    label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+    strong = Pair{Vector{UInt16},Float64}[]
+    weak = Pair{Vector{UInt16},Float64}[]
+    c1 = Pair{Vector{UInt16},Float64}[]
+    c2 = Pair{Vector{UInt16},Float64}[]
+    for site in 1:L
+        for axis in 1:3
+            bond_term = UInt16[label(site, axis), label(site + 1, axis)]
+            push!(isodd(site) ? weak : strong, bond_term => 0.5)
+        end
+        push!(c1, UInt16[label(site, 1), label(site + 1, 1)] => 0.25)
+        push!(c2, UInt16[label(site, 1), label(site + 2, 1)] => 0.25)
+    end
+    strong_polynomial = PauliPolynomial(strong)
+    weak_polynomial = PauliPolynomial(weak)
+    return Dict{Symbol,PauliPolynomial}(
+        :energy_density => hamiltonian,
+        :strong_bond_energy => strong_polynomial,
+        :weak_bond_energy => weak_polynomial,
+        :dimer_order => _polynomial_linear_combination(((1.0, strong_polynomial),
+                                                        (-1.0, weak_polynomial)); hermitian=true),
+        :C1 => PauliPolynomial(c1),
+        :C2 => PauliPolynomial(c2),
+    )
+end
+
+"""Exact finite-chain benchmark values and analytic anchor references."""
+function dimerized_chain_exact_benchmark(J1::Real, J2::Real, delta::Real, L::Int)
+    L <= 12 || throw(ArgumentError("exact benchmark is limited to L <= 12"))
+    observables = dimerized_chain_observables(J1, J2, delta, L)
+    dimension = 1 << L
+    function dense_matrix(polynomial)
+        matrix = zeros(ComplexF64, dimension, dimension)
+        for term in polynomial.terms
+            local_matrix = ComplexF64[1]
+            axes = Dict(cld(Int(label), 3) => Int(mod1(label, 3)) for label in term.word)
+            for site in 1:L
+                local_matrix = kron(local_matrix, _pauli_matrix(get(axes, site, 0)))
+            end
+            matrix .+= term.coefficient .* local_matrix
+        end
+        return Hermitian(matrix)
+    end
+    hamiltonian_matrix = dense_matrix(observables[:energy_density])
+    eigensystem = eigen(hamiltonian_matrix)
+    ground_energy = real(first(eigensystem.values))
+    ground_indices = findall(value -> isapprox(value, ground_energy; atol=1e-9, rtol=1e-9), eigensystem.values)
+    ground_space = eigensystem.vectors[:, ground_indices]
+    intervals = Dict{Symbol,Tuple{Float64,Float64}}()
+    for name in (:strong_bond_energy, :weak_bond_energy, :dimer_order, :C1, :C2)
+        restricted = Hermitian(ground_space' * Matrix(dense_matrix(observables[name])) * ground_space / L)
+        values = eigvals(restricted)
+        intervals[name] = (real(first(values)), real(last(values)))
+    end
+    anchor = if iszero(delta) && isapprox(J2, J1 / 2; atol=0, rtol=1e-12)
+        :majumdar_ghosh
+    elseif iszero(J2) && isapprox(delta, 1; atol=0, rtol=1e-12)
+        :decoupled_dimers
+    else
+        :generic
+    end
+    return (anchor=anchor, energy_density=ground_energy / L,
+            ground_space_dimension=length(ground_indices), observable_intervals=intervals)
+end
+
 """Declare only parameter-valid symmetries of the dimerized periodic chain."""
 function dimerized_chain_symmetries(delta::Real, L::Int)
     L >= 4 && iseven(L) || throw(ArgumentError("dimerized periodic chain length must be even and at least 4"))
@@ -1296,15 +1367,17 @@ end
 """Build a parameter-matched dimerized-chain relaxation specification."""
 function dimerized_chain_specification(J1::Real, J2::Real, delta::Real, L::Int;
         policy::Symbol=:uniform_local, budget::Int=1 + 12L,
-        strengthening::Symbol=:baseline, observables=Dict{Symbol,PauliPolynomial}())
+        strengthening::Symbol=:baseline, observables=nothing)
     hamiltonian = dimerized_j1j2_hamiltonian(J1, J2, delta, L)
     basis = dimerized_chain_basis(policy, L; budget=budget)
     linear_tests, psd_state_basis = _dimerized_strengthening(strengthening, L)
+    observable_polynomials = observables === nothing ?
+        dimerized_chain_observables(J1, J2, delta, L) : observables
     return RelaxationSpecification(hamiltonian, [basis];
         symmetries=dimerized_chain_symmetries(delta, L),
         linear_tests=linear_tests,
         psd_state_basis=psd_state_basis,
-        observables=observables,
+        observables=observable_polynomials,
         normalization=L)
 end
 

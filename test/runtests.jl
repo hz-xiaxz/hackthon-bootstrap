@@ -341,6 +341,33 @@ end
         policy=:uniform_local, budget=25, strengthening=:unknown)
 end
 
+@testset "Phase 2.4 MG and decoupled-dimer observables" begin
+    L = 6
+    observables = dimerized_chain_observables(1.0, 0.5, 0.0, L)
+    @test Set(keys(observables)) == Set((:energy_density, :strong_bond_energy,
+        :weak_bond_energy, :dimer_order, :C1, :C2))
+    compiled = compile_relaxation(dimerized_chain_specification(1.0, 0.5, 0.0, L;
+        policy=:operator_adapted, budget=73, strengthening=:baseline))
+    @test Set(keys(compiled.observables)) == Set(keys(observables))
+
+    mg = dimerized_chain_exact_benchmark(1.0, 0.5, 0.0, L)
+    @test mg.anchor == :majumdar_ghosh
+    @test mg.energy_density ≈ -3 / 8 atol=1e-10
+    @test mg.ground_space_dimension == 2
+    @test mg.observable_intervals[:C1][1] <= -1 / 8 <= mg.observable_intervals[:C1][2]
+    @test mg.observable_intervals[:C2][1] <= 0 <= mg.observable_intervals[:C2][2]
+
+    dimers = dimerized_chain_exact_benchmark(1.0, 0.0, 1.0, L)
+    @test dimers.anchor == :decoupled_dimers
+    @test dimers.energy_density ≈ -3 / 4 atol=1e-10
+    @test dimers.ground_space_dimension == 1
+    @test dimers.observable_intervals[:strong_bond_energy][1] ≈ -3 / 4 atol=1e-10
+    @test dimers.observable_intervals[:strong_bond_energy][2] ≈ -3 / 4 atol=1e-10
+    @test all(value -> isapprox(value, 0; atol=1e-10),
+              dimers.observable_intervals[:weak_bond_energy])
+    @test_throws ArgumentError dimerized_chain_exact_benchmark(1.0, 0.5, 0.0, 14)
+end
+
 @testset "license-aware solver regressions" begin
     if !mosek_license_available()
         @test_skip "Mosek license unavailable: solver-dependent Ising and GSB regressions skipped"
