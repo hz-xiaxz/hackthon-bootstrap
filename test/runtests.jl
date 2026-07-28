@@ -368,10 +368,50 @@ end
     @test_throws ArgumentError dimerized_chain_exact_benchmark(1.0, 0.5, 0.0, 14)
 end
 
+@testset "Phase 2.5 fixed-budget scan and stop rules" begin
+    report = dimerized_chain_scan(L=6, budget=25)
+    @test length(report.rows) == 12
+    @test report.equal_max_block_budget
+    @test report.decision == :not_evaluated
+    @test isempty(report.reasons)
+    @test Set(getfield.(report.rows, :path)) == Set((:mg, :dimer))
+    @test Set(getfield.(report.rows, :policy)) == Set((:uniform_local, :operator_adapted))
+    @test all(row -> row.max_psd_block_dimension == 25, report.rows)
+    @test all(row -> row.scalar_moment_count > 0, report.rows)
+    @test all(row -> !isempty(row.fingerprint), report.rows)
+    repeated = dimerized_chain_scan(L=6, budget=25)
+    @test getfield.(report.rows, :fingerprint) == getfield.(repeated.rows, :fingerprint)
+    @test all(begin
+        pair = filter(row -> row.path == path && row.J2 == J2 && row.delta == delta,
+                      report.rows)
+        length(unique(getfield.(pair, :fingerprint))) == 2
+    end for (path, J2, delta) in ((:mg, 0.4, 0.0), (:mg, 0.5, 0.0),
+                                  (:mg, 0.6, 0.0), (:dimer, 0.0, 1.0),
+                                  (:dimer, 0.0, 0.9), (:dimer, 0.0, 0.8)))
+    @test all(row -> !isempty(row.constraint_provenance), report.rows)
+    @test all(row -> row.lower_bound === nothing && row.gap === nothing && row.status === nothing,
+              report.rows)
+    @test all(begin
+        pair = filter(row -> row.path == path && row.J2 == J2 && row.delta == delta,
+                      report.rows)
+        length(pair) == 2 && pair[1].exact_energy_density ≈ pair[2].exact_energy_density
+    end for (path, J2, delta) in ((:mg, 0.4, 0.0), (:mg, 0.5, 0.0),
+                                  (:mg, 0.6, 0.0), (:dimer, 0.0, 1.0),
+                                  (:dimer, 0.0, 0.9), (:dimer, 0.0, 0.8)))
+end
+
 @testset "license-aware solver regressions" begin
     if !mosek_license_available()
         @test_skip "Mosek license unavailable: solver-dependent Ising and GSB regressions skipped"
     else
+        scan = dimerized_chain_scan(L=6, budget=25; optimizer=QMBCertify.Mosek.Optimizer)
+        @test scan.decision == :stop
+        @test scan.equal_max_block_budget
+        @test "MG anchor did not close at the fixed budget" in scan.reasons
+        @test "adapted basis did not improve any non-anchor scan point" in scan.reasons
+        @test all(row -> string(row.status) == "OPTIMAL", scan.rows)
+        @test all(row -> isfinite(row.lower_bound) && row.gap >= -2e-6, scan.rows)
+
         L = 4
         h = 1.7
         field_only = ising_ground_state_bound(0.0, h, L; degree=1, QUIET=true)

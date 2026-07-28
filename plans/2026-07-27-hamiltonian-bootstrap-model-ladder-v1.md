@@ -1,6 +1,6 @@
 # Hamiltonian Bootstrap Model Ladder
 
-**文件状态：** Gate A Complete（Phase 0–1；Phase 2+ 未执行）  
+**文件状态：** Gate A Complete；Phase 2 Stopped at 2.5（未进入 Phase 3）
 **计划日期：** 2026-07-27  
 **目标仓库：** `/home/hzxiaxz/Quantum-harness/Hamiltonian-Bootstrap`  
 **实施路线（固定顺序）：** MG/显式二聚化 chain → cluster model 加场 → toric code 加场 → Kitaev honeycomb → Shastry–Sutherland → triangular J1-J2
@@ -173,9 +173,9 @@ Table 2 中的 **31** 是 **`N=100, d=4, r=1` 在利用论文全部所列结构�
 - [x] **2.2 [Done] 声明两组 basis policy。** uniform-local 使用显式连续 Pauli strings（先从长度 1–2，再按 budget 加至 3–4）；operator-adapted 在相同 budget 下优先加入 strong-dimer singlet-channel 等价 Pauli words、相邻两个 dimer 的 products、J2 跨 dimer pairs 和目标 observable support。sectors 与 seeds 全部列出，不自动生成猜测。理由：直接检验“从 frustration-free/可解点扰动时 operator-adapted basis 是否更耐用”。
 - [x] **2.3 [Done] 声明 symmetry 和 strengthening。** `δ=0` 可显式使用一站点 translation；`δ≠0` 只允许两站点 translation；reflection、全局 sign 和轴 permutation 必须按参数点显式启用并验证 Hamiltonian invariance。linear tests 与 PSD basis 从小局域 dimer operators 显式列出，逐层启用。理由：防止当前 `translation::Bool` 把 period-2 问题错误商掉。
 - [x] **2.4 [Done] 增加 observables 与 benchmark。** observables 至少含能量密度、强/弱 bond energy、dimer order、`C(1)=<X_iX_{i+1}>/4`、`C(2)=<X_iX_{i+2}>/4`。MG benchmark：`e0=-3/8`；`C(1)` interval 覆盖 `-1/8`，`C(2)` interval 覆盖 0。论文基准与 interval 位于 `MinerU_markdown_2604.01555v1_2081746923717435392.md:645-699`。
-- [ ] **2.5 [Not Started] 执行扰动扫描与停止规则。** 从 `(δ=0,J2/J1=0.5)` 沿 `J2/J1` 双向扰动，并从 `(δ=1,J2=0)` 降低 `δ`；每点比较相同 max-block/scalar-moment budget。若 MG 能量不能闭合、解耦 dimer 端点不精确、period-2 symmetry 检查失败，或 adapted basis 在至少一个非零扰动点未优于 baseline 且诊断无法解释，则停在本 stage，不进入 cluster。
+- [!] **2.5 [Stopped] 已执行扰动扫描并触发停止规则。** 从 `(δ=0,J2/J1=0.5)` 沿 `J2/J1=0.4,0.5,0.6` 扫描，并从 `(δ=1,J2=0)` 沿 `δ=1.0,0.9,0.8` 扫描；每点比较相同最大 PSD block（25）的 uniform-local 与 operator-adapted basis，记录 scalar moments、fingerprint、constraint provenance、ED reference、求解值与 gap。解耦 dimer anchor 在容差内闭合，但 MG anchor 未闭合，且 adapted basis 在所测非零扰动点未优于 baseline，因此按停止规则停在本 stage，不进入 cluster。
 
-**Phase 2 完成定义：** 两个 anchor 通过；uniform/adapted fixed-budget 曲线、observable intervals、constraint provenance 和失效阈值可重放；MG 结果与旧 `GSB` 论文后端交叉核对。
+**Phase 2 状态：Stopped。** 2.1–2.4 结构与精确对角化 benchmark 通过；2.5 的固定预算求解触发停止规则。扫描与 diagnostics 可重放，但 MG fixed-budget relaxation 未闭合，operator-adapted basis 也未改善非零扰动点，所以 Phase 2 完成定义未满足，Phase 3 保持未执行。
 
 ### Phase 3 — Cluster Model with Field
 

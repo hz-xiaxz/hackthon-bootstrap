@@ -1335,6 +1335,68 @@ function dimerized_chain_exact_benchmark(J1::Real, J2::Real, delta::Real, L::Int
             ground_space_dimension=length(ground_indices), observable_intervals=intervals)
 end
 
+"""
+Compile and optionally solve the fixed-budget Phase 2 scan.
+The returned decision mechanically applies the stage stop rules; it never advances stages.
+"""
+function dimerized_chain_scan(; L::Int=6, budget::Int=25, optimizer=nothing,
+        optimizer_attributes=Pair[], anchor_tolerance::Real=1e-5)
+    points = [(path=:mg, J2=ratio, delta=0.0) for ratio in (0.4, 0.5, 0.6)]
+    append!(points, [(path=:dimer, J2=0.0, delta=value) for value in (1.0, 0.9, 0.8)])
+    rows = NamedTuple[]
+    for point in points
+        reference = dimerized_chain_exact_benchmark(1.0, point.J2, point.delta, L)
+        for policy in (:uniform_local, :operator_adapted)
+            compiled = compile_relaxation(dimerized_chain_specification(
+                1.0, point.J2, point.delta, L;
+                policy=policy, budget=budget, strengthening=:baseline))
+            bound = status = nothing
+            if optimizer !== nothing
+                built = build_jump_model(compiled; optimizer=optimizer,
+                                         optimizer_attributes=optimizer_attributes)
+                set_optimizer_attribute(built.model, MOI.Silent(), true)
+                solved = solve_relaxation(built)
+                bound = solved.objective_value
+                status = solved.status
+            end
+            push!(rows, (path=point.path, J2=point.J2, delta=point.delta,
+                policy=policy, max_psd_block_dimension=compiled.diagnostics.max_psd_block_dimension,
+                scalar_moment_count=compiled.diagnostics.scalar_moment_count,
+                fingerprint=compiled.diagnostics.fingerprint,
+                constraint_provenance=copy(compiled.diagnostics.constraint_provenance),
+                exact_energy_density=reference.energy_density, lower_bound=bound,
+                gap=bound === nothing ? nothing : reference.energy_density - bound,
+                status=status, observable_intervals=reference.observable_intervals))
+        end
+    end
+    equal_max_block_budget = all(begin
+        pair = filter(row -> row.path == point.path && row.J2 == point.J2 && row.delta == point.delta, rows)
+        length(unique(getfield.(pair, :max_psd_block_dimension))) == 1
+    end for point in points)
+    if optimizer === nothing
+        return (rows=rows, equal_max_block_budget=equal_max_block_budget,
+                decision=:not_evaluated, reasons=String[])
+    end
+    mg_rows = filter(row -> row.J2 == 0.5 && row.delta == 0.0, rows)
+    dimer_rows = filter(row -> row.J2 == 0.0 && row.delta == 1.0, rows)
+    mg_closed = all(row -> abs(row.gap) <= anchor_tolerance, mg_rows)
+    dimer_closed = all(row -> abs(row.gap) <= anchor_tolerance, dimer_rows)
+    perturbed = filter(row -> !(row.J2 == 0.5 && row.delta == 0.0) &&
+                            !(row.J2 == 0.0 && row.delta == 1.0), rows)
+    adapted_improved = any(begin
+        uniform = only(filter(row -> row.path == adapted.path && row.J2 == adapted.J2 &&
+                                    row.delta == adapted.delta && row.policy == :uniform_local, rows))
+        adapted.gap < uniform.gap - anchor_tolerance
+    end for adapted in perturbed if adapted.policy == :operator_adapted)
+    reasons = String[]
+    equal_max_block_budget || push!(reasons, "fixed max-PSD-block budget mismatch")
+    mg_closed || push!(reasons, "MG anchor did not close at the fixed budget")
+    dimer_closed || push!(reasons, "decoupled-dimer anchor did not close at the fixed budget")
+    adapted_improved || push!(reasons, "adapted basis did not improve any non-anchor scan point")
+    return (rows=rows, equal_max_block_budget=equal_max_block_budget,
+            decision=isempty(reasons) ? :pass : :stop, reasons=reasons)
+end
+
 """Declare only parameter-valid symmetries of the dimerized periodic chain."""
 function dimerized_chain_symmetries(delta::Real, L::Int)
     L >= 4 && iseven(L) || throw(ArgumentError("dimerized periodic chain length must be even and at least 4"))
