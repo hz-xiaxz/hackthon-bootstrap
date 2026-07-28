@@ -191,7 +191,7 @@ Table 2 中的 **31** 是 **`N=100, d=4, r=1` 在利用论文全部所列结构�
   \]
   首轮固定 `h_z=0`，另以 `h_z` 作为显式 symmetry-breaking stress test。理由：验证三体 Hamiltonian、场项和非 Heisenberg symmetry。
 - [x] **3.2 [Done] 声明 basis/observables。** baseline 为连续局域 strings；adapted seeds 包含 cluster stabilizers `Z-X-Z`、相邻 stabilizer products、field operators、稳定子端点 string fragments。observables 为能量、`<Z_{i-1}X_iZ_{i+1}>`、`<X_i>`、`<Z_i>` 与相邻稳定子乘积定义的有限长度 cluster string order；目标 string 的端点和路径显式进入 adapted basis。
-- [ ] **3.3 [Not Started] 声明 symmetry/strengthening。** 不复用 Heisenberg 轴置换；由用户显式列出实际全局/子格 symmetry generators及其用途。先 baseline PSD，再 linear commutators，再小 PSD state-optimality basis；每层记录 conditioning。理由：测试用途化 symmetry 和通用三体 commutator。
+- [x] **3.3 [Done] 声明 symmetry/strengthening。** 未复用 Heisenberg 轴置换；显式声明一格平移、site reflection，以及仅在 `h_z=0` 时成立的 global π-X generator。`h_z≠0` 自动移除该 generator，强行声明会被 invariance check 拒绝。baseline PSD、linear commutator 与 4×4 PSD state-optimality basis 逐层启用并记录 block diagnostics。
 - [ ] **3.4 [Not Started] Benchmark 与停止规则。** `h_x=h_z=0` commuting stabilizer 点必须达到精确能量并固定 stabilizer expectation；小系统用 exact diagonalization 对照 field sweep。若三体项 closure、string observable support 或 symmetry-breaking `h_z` 的 generator rejection 任一失败，停止；若 adapted basis 在固定 budget 下不能延长 stabilizer/string interval 的有效区间，先完成 basis ablation 后再决定是否进入 toric。
 
 **Phase 3 完成定义：** commuting anchor、场扰动、小系统 ED、string observable 和 symmetry-breaking negative test 全部通过；这是通用 polynomial/compiler 的第二真实模型用点。此时才评估是否把共享编译代码从现有文件移入 `src/pauli_relaxation.jl`。

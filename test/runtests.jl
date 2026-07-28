@@ -505,6 +505,37 @@ end
     @test_throws ArgumentError cluster_chain_basis(:operator_adapted, L; budget=10_000)
 end
 
+@testset "Phase 3.3 cluster symmetry and strengthening" begin
+    L = 6
+    symmetric = cluster_chain_symmetries(0.0, L)
+    broken = cluster_chain_symmetries(0.2, L)
+    @test getfield.(symmetric, :name) == [:translation_by_1, :site_reflection, :global_pi_x]
+    @test getfield.(broken, :name) == [:translation_by_1, :site_reflection]
+    @test all(symmetry -> symmetry.axis_map == (0x01, 0x02, 0x03), symmetric)
+
+    baseline = cluster_chain_specification(1.0, 0.3, 0.0, L;
+        policy=:operator_adapted, budget=25, strengthening=:baseline)
+    linear = cluster_chain_specification(1.0, 0.3, 0.0, L;
+        policy=:operator_adapted, budget=25, strengthening=:linear)
+    psd = cluster_chain_specification(1.0, 0.3, 0.0, L;
+        policy=:operator_adapted, budget=25, strengthening=:psd)
+    @test isempty(baseline.linear_tests) && isempty(baseline.psd_state_basis)
+    @test length(linear.linear_tests) == 1 && isempty(linear.psd_state_basis)
+    @test length(psd.linear_tests) == 1 && length(psd.psd_state_basis) == 4
+    @test baseline.normalization == L
+    @test compile_relaxation(baseline).diagnostics.psd_block_dimensions == [25]
+    @test compile_relaxation(psd).diagnostics.psd_block_dimensions == [25, 4]
+
+    forbidden_spin_flip = SymmetryDeclaration(:forbidden_global_pi_x, :moment_zero,
+        collect(1:L); axis_sign=(1, -1, -1))
+    @test_throws ArgumentError RelaxationSpecification(
+        cluster_chain_hamiltonian(1.0, 0.3, 0.2, L),
+        [cluster_chain_basis(:operator_adapted, L; budget=25)];
+        symmetries=[forbidden_spin_flip])
+    @test_throws ArgumentError cluster_chain_specification(1.0, 0.3, 0.0, L;
+        policy=:operator_adapted, budget=25, strengthening=:unknown)
+end
+
 @testset "license-aware solver regressions" begin
     if !mosek_license_available()
         @test_skip "Mosek license unavailable: solver-dependent Ising and GSB regressions skipped"

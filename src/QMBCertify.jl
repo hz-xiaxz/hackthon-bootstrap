@@ -27,6 +27,7 @@ export dimerized_j1j2_hamiltonian, dimerized_chain_basis, mg_three_site_projecto
 export dimerized_chain_observables, dimerized_chain_exact_benchmark, dimerized_chain_scan
 export dimerized_chain_symmetries, dimerized_chain_specification
 export cluster_chain_hamiltonian, cluster_chain_basis, cluster_chain_observables
+export cluster_chain_symmetries, cluster_chain_specification
 export IsingMomentResult, ising_relaxation_specification, compile_ising_relaxation
 export ising_ground_state_bound
 

@@ -1555,6 +1555,52 @@ function cluster_chain_observables(J::Real, hx::Real, hz::Real, L::Int)
     )
 end
 
+"""Declare parameter-valid cluster-chain translation, reflection, and spin-flip symmetries."""
+function cluster_chain_symmetries(hz::Real, L::Int)
+    L >= 4 || throw(ArgumentError("periodic cluster chain symmetries require L >= 4"))
+    isfinite(hz) || throw(ArgumentError("longitudinal field must be finite"))
+    symmetries = SymmetryDeclaration[
+        SymmetryDeclaration(:translation_by_1, :moment_equality,
+                            [mod1(site + 1, L) for site in 1:L]),
+        SymmetryDeclaration(:site_reflection, :moment_equality,
+                            [mod1(2 - site, L) for site in 1:L]),
+    ]
+    if iszero(hz)
+        push!(symmetries, SymmetryDeclaration(:global_pi_x, :moment_zero, collect(1:L);
+                                              axis_sign=(1, -1, -1)))
+    end
+    return symmetries
+end
+
+function _cluster_strengthening(level::Symbol, L::Int)
+    level in (:baseline, :linear, :psd) || throw(ArgumentError(
+        "unknown cluster strengthening level $level"))
+    label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+    stabilizer = UInt16[label(L, 3), label(1, 1), label(2, 3)]
+    test = PauliPolynomial([stabilizer => 1.0])
+    linear_tests = level == :baseline ? PauliPolynomial[] : [test]
+    psd_basis = level == :psd ? Vector{UInt16}[
+        UInt16[], stabilizer, UInt16[label(1, 1)], UInt16[label(1, 3)]] : Vector{UInt16}[]
+    return linear_tests, psd_basis
+end
+
+"""Build a parameter-matched cluster-chain relaxation specification."""
+function cluster_chain_specification(J::Real, hx::Real, hz::Real, L::Int;
+        policy::Symbol=:uniform_local, budget::Int=1 + 4L,
+        strengthening::Symbol=:baseline, observables=nothing)
+    hamiltonian = cluster_chain_hamiltonian(J, hx, hz, L)
+    basis = cluster_chain_basis(policy, L; budget=budget)
+    linear_tests, psd_state_basis = _cluster_strengthening(strengthening, L)
+    observable_polynomials = observables === nothing ?
+        cluster_chain_observables(J, hx, hz, L) : observables
+    return RelaxationSpecification(hamiltonian, [basis];
+        symmetries=cluster_chain_symmetries(hz, L),
+        linear_tests=linear_tests,
+        psd_state_basis=psd_state_basis,
+        observables=observable_polynomials,
+        normalization=L)
+end
+
 """Construct the paper's explicit 1D sparse basis and Table 2 structural counts."""
 function heisenberg_table2_benchmark(N::Int=100, d::Int=4, r::Int=1)
     N > 0 && 0 <= d <= N || throw(ArgumentError("invalid Table 2 parameters"))
