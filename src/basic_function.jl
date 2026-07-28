@@ -1264,6 +1264,50 @@ function dimerized_chain_basis(policy::Symbol, L::Int; budget::Int=1 + 12L)
     return BasisSector(Symbol(:dimerized_, policy), words)
 end
 
+"""Declare only parameter-valid symmetries of the dimerized periodic chain."""
+function dimerized_chain_symmetries(delta::Real, L::Int)
+    L >= 4 && iseven(L) || throw(ArgumentError("dimerized periodic chain length must be even and at least 4"))
+    isfinite(delta) || throw(ArgumentError("dimerization must be finite"))
+    translation_step = iszero(delta) ? 1 : 2
+    translation = [mod1(site + translation_step, L) for site in 1:L]
+    reflection = [mod1(3 - site, L) for site in 1:L]
+    identity_sites = collect(1:L)
+    return SymmetryDeclaration[
+        SymmetryDeclaration(Symbol(:translation_by_, translation_step), :moment_equality, translation),
+        SymmetryDeclaration(:strong_bond_reflection, :moment_equality, reflection),
+        SymmetryDeclaration(:global_pi_z, :moment_zero, identity_sites; axis_sign=(-1, -1, 1)),
+        SymmetryDeclaration(:global_pi_x, :moment_zero, identity_sites; axis_sign=(1, -1, -1)),
+        SymmetryDeclaration(:axis_cycle, :moment_equality, identity_sites; axis_map=(2, 3, 1)),
+    ]
+end
+
+function _dimerized_strengthening(level::Symbol, L::Int)
+    level in (:baseline, :linear, :psd) || throw(ArgumentError("unknown strengthening level $level"))
+    label(site, axis) = UInt16(3 * (mod1(site, L) - 1) + axis)
+    strong_bond_terms = [UInt16[label(2, axis), label(3, axis)] => 1.0 for axis in 1:3]
+    linear_tests = level == :baseline ? PauliPolynomial[] : [PauliPolynomial(strong_bond_terms)]
+    psd_state_basis = level == :psd ? Vector{UInt16}[UInt16[],
+        UInt16[label(2, 1), label(3, 1)],
+        UInt16[label(2, 2), label(3, 2)],
+        UInt16[label(2, 3), label(3, 3)]] : Vector{UInt16}[]
+    return linear_tests, psd_state_basis
+end
+
+"""Build a parameter-matched dimerized-chain relaxation specification."""
+function dimerized_chain_specification(J1::Real, J2::Real, delta::Real, L::Int;
+        policy::Symbol=:uniform_local, budget::Int=1 + 12L,
+        strengthening::Symbol=:baseline, observables=Dict{Symbol,PauliPolynomial}())
+    hamiltonian = dimerized_j1j2_hamiltonian(J1, J2, delta, L)
+    basis = dimerized_chain_basis(policy, L; budget=budget)
+    linear_tests, psd_state_basis = _dimerized_strengthening(strengthening, L)
+    return RelaxationSpecification(hamiltonian, [basis];
+        symmetries=dimerized_chain_symmetries(delta, L),
+        linear_tests=linear_tests,
+        psd_state_basis=psd_state_basis,
+        observables=observables,
+        normalization=L)
+end
+
 """Construct the paper's explicit 1D sparse basis and Table 2 structural counts."""
 function heisenberg_table2_benchmark(N::Int=100, d::Int=4, r::Int=1)
     N > 0 && 0 <= d <= N || throw(ArgumentError("invalid Table 2 parameters"))

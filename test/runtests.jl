@@ -310,6 +310,37 @@ end
     @test_throws ArgumentError dimerized_chain_basis(:operator_adapted, L; budget=10_000)
 end
 
+@testset "Phase 2.3 parameter-matched symmetry and strengthening" begin
+    L = 6
+    uniform_symmetries = dimerized_chain_symmetries(0.0, L)
+    dimerized_symmetries = dimerized_chain_symmetries(0.4, L)
+    @test uniform_symmetries[1].name == :translation_by_1
+    @test uniform_symmetries[1].site_map == [2, 3, 4, 5, 6, 1]
+    @test dimerized_symmetries[1].name == :translation_by_2
+    @test dimerized_symmetries[1].site_map == [3, 4, 5, 6, 1, 2]
+
+    baseline = dimerized_chain_specification(1.0, 0.5, 0.0, L;
+        policy=:uniform_local, budget=25, strengthening=:baseline)
+    linear = dimerized_chain_specification(1.0, 0.5, 0.0, L;
+        policy=:uniform_local, budget=25, strengthening=:linear)
+    psd = dimerized_chain_specification(1.0, 0.5, 0.0, L;
+        policy=:uniform_local, budget=25, strengthening=:psd)
+    @test isempty(baseline.linear_tests) && isempty(baseline.psd_state_basis)
+    @test length(linear.linear_tests) == 1 && isempty(linear.psd_state_basis)
+    @test length(psd.linear_tests) == 1 && length(psd.psd_state_basis) == 4
+    @test baseline.normalization == L
+    @test compile_relaxation(psd).diagnostics.psd_block_count == 2
+
+    wrong_translation = SymmetryDeclaration(:wrong_translation, :moment_equality,
+        [2, 3, 4, 5, 6, 1])
+    dimerized_hamiltonian = dimerized_j1j2_hamiltonian(1.0, 0.0, 0.4, L)
+    @test_throws ArgumentError RelaxationSpecification(dimerized_hamiltonian,
+        [dimerized_chain_basis(:uniform_local, L; budget=25)];
+        symmetries=[wrong_translation])
+    @test_throws ArgumentError dimerized_chain_specification(1.0, 0.0, 0.4, L;
+        policy=:uniform_local, budget=25, strengthening=:unknown)
+end
+
 @testset "license-aware solver regressions" begin
     if !mosek_license_available()
         @test_skip "Mosek license unavailable: solver-dependent Ising and GSB regressions skipped"
